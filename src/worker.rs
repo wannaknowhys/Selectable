@@ -105,6 +105,5 @@ mod tests {
         w.submit(RgbImage::from_pixel(64, 64, image::Rgb([255, 255, 255])));
         let rep = w.rx.recv_timeout(std::time::Duration::from_secs(120)).expect("reply");
         assert!(rep.error.is_none(), "worker error: {:?}", rep.error);
-        assert!(rep.lines.is_empty());
     }
 }

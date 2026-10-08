@@ -27,7 +27,7 @@ use windows::{
         },
         System::SystemInformation::GetLocalTime,
         UI::{
-            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_ESCAPE},
+            Input::KeyboardAndMouse::{GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_ESCAPE},
             Shell::{
                 FOLDERID_Documents, SHGetKnownFolderPath, ShellExecuteW, KF_FLAG_DEFAULT,
             },
@@ -383,22 +383,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if let Some((t0, p0)) = st.press_at.take() {
                 let tap = t0.elapsed() <= Duration::from_millis(TAP_MS) && dist(p0, p) <= TAP_PX;
                 if tap && !st.dragging {
-                    // Click: whole box under cursor (or clear).
+                    // Click: select the whole box under cursor. Selection alone
+                    // never touches the clipboard (issue #1); copy is Ctrl+C.
                     match line_at_point(st, p) {
                         Some(li) => {
                             let n = st.lines[li].chars.len();
                             st.sel = Some(((li, 0), (li, n)));
-                            copy_selection(st);
+                            set_title(st, &format!("Selectable — 已选中 {} 字", count_chars(st)));
                         }
                         None => {
                             st.sel = None;
+                            set_title(st, "Selectable");
                         }
                     }
                 } else if st.dragging {
                     st.cursor = char_at_point(st, p).or(st.cursor);
                     st.sel = norm_range(st.anchor, st.cursor);
                     if st.sel.is_some() {
-                        copy_selection(st);
+                        set_title(st, &format!("Selectable — 已选中 {} 字", count_chars(st)));
                     }
                 }
                 st.dragging = false;
@@ -450,8 +452,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             LRESULT(0)
         }
         WM_KEYDOWN => {
-            if wp.0 as u32 == VK_ESCAPE.0 as u32 {
+            let vk = wp.0 as u32;
+            if vk == VK_ESCAPE.0 as u32 {
                 let _ = DestroyWindow(hwnd);
+            } else if vk == 0x43 && ctrl_held() {
+                // Explicit copy only (issue #1).
+                let text = selected_text(st);
+                if text.is_empty() {
+                    show_toast(st, "先选中要复制的文字".to_string());
+                } else {
+                    copy_text(st, &text);
+                }
             }
             LRESULT(0)
         }
@@ -610,13 +621,19 @@ fn selected_or_all(st: &State) -> String {
     }
 }
 
-fn copy_selection(st: &mut State) {
-    let text = selected_text(st);
-    if text.is_empty() {
-        return;
-    }
-    match clipboard::set_text(&text) {
-        Ok(_) => show_toast(st, format!("已复制：{}", preview(&text, 120))),
+fn ctrl_held() -> bool {
+    unsafe { GetKeyState(VK_CONTROL.0 as i32) & 0x8000u16 as i16 != 0 }
+}
+
+fn count_chars(st: &State) -> usize {
+    st.sel
+        .map(|r| range_text(st, r).chars().filter(|c| *c != '\n').count())
+        .unwrap_or(0)
+}
+
+fn copy_text(st: &mut State, text: &str) {
+    match clipboard::set_text(text) {
+        Ok(_) => show_toast(st, format!("已复制：{}", preview(text, 120))),
         Err(e) => show_toast(st, format!("复制失败：{e:#}")),
     }
 }
