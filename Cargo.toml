@@ -1,0 +1,15 @@
+[package]
+name = "selectable"
+version = "0.1.0"
+edition = "2021"
+description = "Windows screenshot-to-selectable-text (PP-OCRv6 + ONNX Runtime, offline-first)"
+
+# NOTE: toolchain prerequisite is rustup + MSVC/Clang.
+# ORT native binaries are fetched at build time by the `ort` crate, never vendored.
+[dependencies]
+ort = "2"
+windows = "0.61"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+image = "0.25"

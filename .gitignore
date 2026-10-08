@@ -1,0 +1,15 @@
+# Rust
+/target/
+Cargo.lock
+
+# Models: never committed, fetched via tools/fetch-models.mjs
+models/*
+!models/README.md
+
+# Local config (example is committed, real one is not)
+config.toml
+
+# Scratch
+temp/
+*.log
+.DS_Store

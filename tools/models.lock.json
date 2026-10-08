@@ -1,0 +1,21 @@
+{
+  "note": "Pinned Hugging Face commits (immutable). Sizes are approximate repo totals from the HF API; the fetch script re-checks after download.",
+  "hfBase": "https://huggingface.co",
+  "tiers": {
+    "medium": {
+      "det": { "repo": "PaddlePaddle/PP-OCRv6_medium_det_onnx", "rev": "61323801669c338b7891481ec7bac61ce31b576a", "file": "inference.onnx", "bytes": 62032837 },
+      "rec": { "repo": "PaddlePaddle/PP-OCRv6_medium_rec_onnx", "rev": "50c7eacafc52fa7bcf4194e8cd08e46f8558504b", "file": "inference.onnx", "bytes": 76554979 },
+      "yml": { "repo": "PaddlePaddle/PP-OCRv6_medium_rec_onnx", "rev": "50c7eacafc52fa7bcf4194e8cd08e46f8558504b", "file": "inference.yml" }
+    },
+    "small": {
+      "det": { "repo": "PaddlePaddle/PP-OCRv6_small_det_onnx", "rev": "28fe5895c24fd108c19eb3e8479f4ab385fbfc62", "file": "inference.onnx", "bytes": 9880512 },
+      "rec": { "repo": "PaddlePaddle/PP-OCRv6_small_rec_onnx", "rev": "b8f84f0b80c529de40b4fbb3544b84fa7233a513", "file": "inference.onnx", "bytes": 21159378 },
+      "yml": { "repo": "PaddlePaddle/PP-OCRv6_small_rec_onnx", "rev": "b8f84f0b80c529de40b4fbb3544b84fa7233a513", "file": "inference.yml" }
+    }
+  },
+  "translate": {
+    "note": "Phase 2. Resolved at fetch time via the Mozilla model registry (latest releaseStatus kept).",
+    "registry": "https://storage.googleapis.com/moz-fx-translations-data--303e-prod-translations-data/db/models.json",
+    "pairs": ["enzh", "zhen"]
+  }
+}

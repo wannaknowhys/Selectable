@@ -1,0 +1,17 @@
+# Copy to config.toml and adjust. Real config.toml is gitignored.
+[hotkey]
+# v1: single combo. The code parses a list so options UI can add more later.
+combos = ["Shift+PrintScreen"]
+
+[ocr]
+# Explicit tier wins or hard-errors when files are missing.
+# When empty: cascade medium -> small -> tiny, first complete triple wins.
+# model = "medium"
+cascade = ["medium", "small", "tiny"]
+
+[translate]
+source = "bergamot"   # bergamot | online | external
+external_url = "https://translate.google.com/?sl=auto&tl=zh-CN&text={text}"
+
+[search]
+engine_url = "https://www.bing.com/search?q={text}"
