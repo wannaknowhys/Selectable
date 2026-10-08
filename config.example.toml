@@ -15,3 +15,7 @@ external_url = "https://translate.google.com/?sl=auto&tl=zh-CN&text={text}"
 
 [search]
 engine_url = "https://www.bing.com/search?q={text}"
+
+[save]
+# Empty = Documents\ScreenShot. Set an absolute path to override.
+# dir = "D:/Shots"

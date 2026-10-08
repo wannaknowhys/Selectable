@@ -11,6 +11,12 @@ struct FileConfig {
     hotkey: HotkeySection,
     #[serde(default)]
     ocr: OcrSection,
+    #[serde(default)]
+    search: SearchSection,
+    #[serde(default)]
+    translate: TranslateSection,
+    #[serde(default)]
+    save: SaveSection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +59,44 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Deserialize)]
+struct SearchSection {
+    #[serde(default = "default_search_url")]
+    engine_url: String,
+}
+
+impl Default for SearchSection {
+    fn default() -> Self {
+        Self { engine_url: default_search_url() }
+    }
+}
+
+fn default_search_url() -> String {
+    "https://www.bing.com/search?q={text}".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct TranslateSection {
+    #[serde(default = "default_translate_url")]
+    external_url: String,
+}
+
+impl Default for TranslateSection {
+    fn default() -> Self {
+        Self { external_url: default_translate_url() }
+    }
+}
+
+fn default_translate_url() -> String {
+    "https://translate.google.com/?sl=auto&tl=zh-CN&text={text}".to_string()
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SaveSection {
+    #[serde(default)]
+    dir: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub combos: Vec<String>,
@@ -60,6 +104,9 @@ pub struct AppConfig {
     pub cascade: Vec<String>,
     pub rec_batch_size: usize,
     pub use_directml: bool,
+    pub search_url: String,
+    pub translate_url: String,
+    pub save_dir: Option<String>,
 }
 
 impl AppConfig {
@@ -78,6 +125,9 @@ impl AppConfig {
                     cascade: fc.ocr.cascade,
                     rec_batch_size: fc.ocr.rec_batch_size.max(1),
                     use_directml: fc.ocr.use_directml,
+                    search_url: fc.search.engine_url,
+                    translate_url: fc.translate.external_url,
+                    save_dir: fc.save.dir,
                 });
             }
         }
@@ -87,6 +137,9 @@ impl AppConfig {
             cascade: default_cascade(),
             rec_batch_size: default_batch(),
             use_directml: true,
+            search_url: default_search_url(),
+            translate_url: default_translate_url(),
+            save_dir: None,
         })
     }
 }

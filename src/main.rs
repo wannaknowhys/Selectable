@@ -1,9 +1,11 @@
 mod capture;
+mod clipboard;
 mod config;
 mod db;
 mod geometry;
 mod hotkey;
 mod ocr;
+mod overlay;
 
 use anyhow::Result;
 use image::Rgb;
@@ -12,8 +14,16 @@ use imageproc::{drawing::draw_hollow_polygon_mut, point::Point as IPoint};
 use crate::{config::AppConfig, hotkey::Hotkeys, ocr::OcrEngine};
 
 fn main() -> Result<()> {
+    unsafe {
+        // Physical pixels everywhere so overlay coords match the capture.
+        let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        );
+    }
     let args: Vec<String> = std::env::args().collect();
     let once = args.iter().any(|a| a == "--once");
+    let show_ui = args.iter().any(|a| a == "--overlay");
+    let overlay_test = args.iter().any(|a| a == "--overlay-test");
     let image_arg = args.iter().position(|a| a == "--image").and_then(|i| args.get(i + 1)).cloned();
     let mut cfg = AppConfig::load()?;
     if std::env::var("SELECTABLE_CPU").is_ok() {
@@ -27,15 +37,44 @@ fn main() -> Result<()> {
     if once || image_arg.is_some() {
         return oneshot(&mut engine, image_arg);
     }
+    if show_ui || overlay_test {
+        // Debug/e2e path: capture once and show the overlay immediately.
+        let auto = overlay_test.then_some(4000);
+        return capture_and_show(&mut engine, &cfg, auto);
+    }
 
     let hk = Hotkeys::register_shift_printscreen()?;
-    println!("selectable: press Shift+PrintScreen to capture+OCR (this window shows results)");
+    println!("selectable: press Shift+PrintScreen for overlay, Esc closes it");
     hk.run_loop(|| {
-        if let Err(e) = oneshot(&mut engine, None) {
+        if let Err(e) = capture_and_show(&mut engine, &cfg, None) {
             eprintln!("capture failed: {e:#}");
         }
     });
     Ok(())
+}
+
+fn capture_and_show(engine: &mut OcrEngine, cfg: &AppConfig, autoclose_ms: Option<u32>) -> Result<()> {
+    let shot = capture::capture_virtual_screen()?;
+    // Foreground window is still the user's app here; the overlay pops after.
+    let title = overlay::active_window_title();
+    let (lines, t) = engine.run(&shot)?;
+    println!(
+        "timings ms: det pre {:.0} inf {:.0} post {:.0} | rec pre {:.0} inf {:.0} dec {:.0} ({} lines)",
+        t.det_pre_ms, t.det_inf_ms, t.det_post_ms, t.rec_pre_ms, t.rec_inf_ms, t.rec_dec_ms,
+        lines.len()
+    );
+    let req = overlay::OverlayRequest {
+        shot,
+        lines,
+        active_title: title,
+        search_url: cfg.search_url.clone(),
+        translate_url: cfg.translate_url.clone(),
+        save_dir: cfg.save_dir.clone(),
+    };
+    match autoclose_ms {
+        Some(ms) => overlay::show_overlay_autoclose(req, ms),
+        None => overlay::show_overlay(req),
+    }
 }
 
 fn oneshot(engine: &mut OcrEngine, image_arg: Option<String>) -> Result<()> {

@@ -124,3 +124,17 @@ Selectable/
 ## 9. Local prerequisites
 
 Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only).
+
+## 10. Save feature (M2, decided)
+
+- A native Win32 BUTTON ("Save") lives at the overlay's bottom-right corner.
+- Left-click: save as `date-time-activewindow.png` into `Documents\ScreenShot\`
+  (e.g. `2026-10-08-14-32-10-Notepad.png`), creating the folder if needed.
+  - Local `SYSTEMTIME`, pattern `{yyyy}-{MM}-{dd}-{HH}-{mm}-{ss}`.
+  - "Active window" = the foreground window at hotkey time (title grabbed before the
+    overlay pops). Illegal characters `<>:"/\|?*` and controls become `_`, trailing
+    spaces/dots stripped, long names truncated, empty titles fall back to `screenshot`.
+- Right-click the button: the **standard system Save dialog** via Win32
+  (`IFileSaveDialog` through the `windows` crate's COM bindings — no hand-rolled UI),
+  prefilled with the same default name/folder, png extension.
+- PNG encoding via the `image` crate; failures show a MessageBox and are logged.

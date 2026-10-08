@@ -120,3 +120,16 @@ Selectable/
 
 Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉模型脚本）。
 本机当前有 Node/git，无 cargo，装 rustup 后再验证 `cargo build`。
+
+## 10. 保存功能（M2，已定）
+
+- Overlay 右下角常驻「保存」按钮（原生 Win32 BUTTON 子窗口）。
+- 左键：按 `日期-时间-当前激活窗口名.png` 存到 `我的文档\ScreenShot\`（如
+  `2026-10-08-14-32-10-记事本.png`），文件夹不存在就新建。
+  - 日期时间取本地 `SYSTEMTIME`，`{yyyy}-{MM}-{dd}-{HH}-{mm}-{ss}`。
+  - 「当前激活窗口」指按热键瞬间的前台窗口（Overlay 弹出前抓取标题），非法文件名字符
+    `<>:"/\|?*` 及控制字符替换为 `_`，尾部空格/点去掉，超长截断，空标题兜底 `screenshot`。
+- 右键按钮：弹出**系统标准另存为对话框**，用 Win32 API 直接调（`IFileSaveDialog`，
+  Rust 经 `windows` crate 做 COM 调用即可，不手搓），默认文件名同左键规则、默认目录
+  同上，扩展名 png。
+- PNG 编码用 `image` crate；保存失败弹系统提示（MessageBox）并记日志，不静默丢图。
