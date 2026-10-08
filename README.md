@@ -16,6 +16,7 @@ See the full design: [DESIGN.md](DESIGN.md) / [设计文档](DESIGN.zh-CN.md).
 ```cmd
 node tools\fetch-models.mjs --tier small
 cargo run
+cargo xtask dist
 ```
 
 Models are never committed — see [models/README.md](models/README.md).

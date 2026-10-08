@@ -7,9 +7,13 @@ models/*
 !models/README.md
 
 # Local config (example is committed, real one is not)
-config.toml
+# Anchored: must not ignore .cargo/config.toml (cargo xtask alias).
+/config.toml
 
 # Scratch
 temp/
 *.log
 .DS_Store
+
+# Portable distribution assembled by `cargo xtask dist` (never committed)
+dist/

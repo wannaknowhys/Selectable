@@ -98,6 +98,12 @@ Selectable/
 
 无安装包，不写注册表；开机自启做成可选（计划任务/启动文件夹二选一）。
 
+绿色目录由 `cargo xtask dist` 组装（`dist/Selectable/`，git 忽略）：
+`Selectable.exe + DirectML.dll + models/<档>/ + config.toml`。
+cargo 只负责编译，不管装配；xtask 会复用已编好的 exe，并自动补齐缺失的模型档
+（调 `tools/fetch-models.mjs`），已有 `config.toml` 永不覆盖。`dist.bat` 是双击入口。
+cmake 现在不引入（纯 Rust 用 xtask 是惯用法），Bergamot C++ 阶段再用 cmake 编译翻译库。
+
 ## 7. 入库策略（库与模型怎么进 repo）
 
 - **Rust 库**：只进 `Cargo.toml`（crates.io registry），不 vendor。ORT 原生二进制由

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Windows screenshot-to-selectable-text (PP-OCRv6 + ONNX Runtime, offline-first)"
 
+[workspace]
+members = [".", "xtask"]
+default-members = ["."]
+
 # NOTE: toolchain prerequisite is rustup + MSVC/Clang.
 # ORT native binaries are fetched at build time by the `ort` crate, never vendored.
 [dependencies]

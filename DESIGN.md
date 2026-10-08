@@ -19,7 +19,10 @@ MVP (all in scope):
 5. OCR ships PP-OCRv6 **medium** first, falling back to small if too big/slow;
    same binary, only the model triple changes.
 6. Portable layout: `exe + models folder`, no installer, no registry writes
-   (optional autostart excepted).
+   (optional autostart excepted). Assembled by `cargo xtask dist` into
+   `dist/Selectable/` (gitignored): `Selectable.exe + DirectML.dll + models/<tier>/`
+   `+ config.toml`, with missing tiers backfilled and existing `config.toml` kept.
+   No cmake for now (xtask is the Rust idiom); cmake arrives with Bergamot C++.
 
 Non-goals: PDF/document parsing (PaddleOCR-VL territory), handwriting IME, cloud sync.
 

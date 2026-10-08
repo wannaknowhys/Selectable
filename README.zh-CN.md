@@ -16,6 +16,7 @@ Windows 截屏即选词：按 `Shift+PrintScreen`，弹出最高全屏窗口，�
 ```cmd
 node tools\fetch-models.mjs --tier small
 cargo run
+cargo xtask dist
 ```
 
 模型永不进 git，见 [models/README.md](models/README.md)。
