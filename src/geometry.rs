@@ -116,6 +116,30 @@ impl Quad {
     pub fn crop_height(&self) -> u32 {
         self.height_f32().round().max(1.0) as u32
     }
+
+    /// Horizontal strip of an ordered (tl, tr, br, bl) quad between width
+    /// fractions f0..f1. Used to map CTC char spans back onto the screen.
+    /// For tall (vertical-text) quads the caller should fall back to the
+    /// whole box; only near-horizontal strips are meaningful here.
+    pub fn hstrip(&self, f0: f32, f1: f32) -> Quad {
+        let top = |f: f32| {
+            [
+                self.points[0][0] + (self.points[1][0] - self.points[0][0]) * f,
+                self.points[0][1] + (self.points[1][1] - self.points[0][1]) * f,
+            ]
+        };
+        let bot = |f: f32| {
+            [
+                self.points[3][0] + (self.points[2][0] - self.points[3][0]) * f,
+                self.points[3][1] + (self.points[2][1] - self.points[3][1]) * f,
+            ]
+        };
+        Quad { points: [top(f0), top(f1), bot(f1), bot(f0)] }
+    }
+
+    pub fn is_horizontal(&self) -> bool {
+        self.height_f32() <= self.width_f32() * 1.2 + 2.0
+    }
 }
 
 fn cross(o: &Point, a: &Point, b: &Point) -> f32 {

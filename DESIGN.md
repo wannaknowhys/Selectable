@@ -155,11 +155,11 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
 - **Selection**: click (<300ms, <6px move) selects the whole box; press-drag selects a
   char range, spanning boxes in reading order; selection redrawn white-on-dark-blue
   (YaHei approximation, size ≈ box height).
-- **B (char precision) proposal**: Paddle's single-char coordinates are open source
-  (Apache-2.0, same repo, `CTCLabelDecode` post-processing — not a new model — so we
-  can copy it): map each emitted char's CTC timestep back to the crop's x-range, then
-  through the inverse perspective transform to screen char boxes. Implemented on
-  approval.
+- **B (char precision) implemented**: Paddle's single-char coordinates are
+  `CTCLabelDecode` post-processing (Apache-2.0, not a new model — copied into
+  `decode()`): each emitted char keeps its CTC timestep span → crop x-fraction →
+  screen strip via quad-edge interpolation. Long-press selects by strips, no more
+  even splitting. Accurate for horizontal text; vertical falls back to whole-box.
 - **Toast**: bottom-left rounded translucent strip showing copied text, fades out
   over 3s (100ms steps), truncated when long.
 - **Translation (placeholder)**: engine not wired yet; actions toast instead. State

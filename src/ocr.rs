@@ -22,6 +22,16 @@ pub struct OcrLine {
     pub quad: Quad,
     pub text: String,
     pub score: f32,
+    /// Per-char hits from CTC alignment; f0/f1 are fractions of crop width.
+    pub chars: Vec<CharHit>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CharHit {
+    pub text: String,
+    pub f0: f32,
+    pub f1: f32,
+    pub score: f32,
 }
 
 #[derive(Debug, Default)]
@@ -287,7 +297,7 @@ impl OcrEngine {
         order.sort_by(|&a, &b| {
             aspect(&crops[a]).total_cmp(&aspect(&crops[b]))
         });
-        let mut texts: Vec<Option<(String, f32)>> = (0..crops.len()).map(|_| None).collect();
+        let mut texts: Vec<Option<(String, f32, Vec<CharHit>)>> = (0..crops.len()).map(|_| None).collect();
         for chunk in order.chunks(self.batch_size) {
             let max_ratio = chunk
                 .iter()
@@ -332,18 +342,30 @@ impl OcrEngine {
             .into_iter()
             .zip(texts.into_iter())
             .map(|(b, r)| {
-                let (text, score) = r.unwrap_or_default();
-                OcrLine { quad: b.bbox, text, score }
+                let (text, score, chars) = r.unwrap_or_default();
+                OcrLine { quad: b.bbox, text, score, chars }
             })
             .collect();
         Ok((lines, t))
     }
 
-    fn decode(&self, logits: ndarray::ArrayView2<'_, f32>) -> (String, f32) {
+    /// Greedy CTC decode that also records each emitted char's timestep span,
+    /// so callers can map chars back to horizontal fractions of the crop
+    /// (the same alignment Paddle's single-char coordinates use).
+    fn decode(&self, logits: ndarray::ArrayView2<'_, f32>) -> (String, f32, Vec<CharHit>) {
+        let t_total = logits.nrows().max(1) as f32;
         let mut text = String::new();
-        let mut confs = Vec::new();
+        let mut chars: Vec<CharHit> = Vec::new();
         let mut last = usize::MAX;
-        for step in logits.outer_iter() {
+        // (char index into `chars`, accumulated prob, count)
+        let mut open: Option<(usize, f32, usize, usize)> = None; // (pos, sum, n, t0)
+        let flush = |chars: &mut Vec<CharHit>, o: Option<(usize, f32, usize, usize)>, t1: usize| {
+            if let Some((pos, sum, n, _t0)) = o {
+                chars[pos].f1 = t1 as f32 / t_total;
+                chars[pos].score = sum / n as f32;
+            }
+        };
+        for (t, step) in logits.outer_iter().enumerate() {
             let (idx, prob) = step
                 .iter()
                 .enumerate()
@@ -351,17 +373,30 @@ impl OcrEngine {
                 .map(|(i, p)| (i, *p))
                 .unwrap_or((0, 0.0));
             if idx == 0 || idx == last {
+                if idx == last {
+                    if let Some(o) = open.as_mut() {
+                        o.1 += prob;
+                        o.2 += 1;
+                    }
+                }
                 last = idx;
                 continue;
             }
+            flush(&mut chars, open.take(), t);
             if let Some(ch) = self.dict.get(idx) {
                 text.push_str(ch);
-                confs.push(prob);
+                chars.push(CharHit { text: ch.clone(), f0: t as f32 / t_total, f1: (t + 1) as f32 / t_total, score: prob });
+                open = Some((chars.len() - 1, prob, 1, t));
             }
             last = idx;
         }
-        let score = if confs.is_empty() { 0.0 } else { confs.iter().sum::<f32>() / confs.len() as f32 };
-        (text, score)
+        flush(&mut chars, open.take(), logits.nrows());
+        let score = if chars.is_empty() {
+            0.0
+        } else {
+            chars.iter().map(|c| c.score).sum::<f32>() / chars.len() as f32
+        };
+        (text, score, chars)
     }
 }
 

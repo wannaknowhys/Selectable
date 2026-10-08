@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod capture;
 mod clipboard;
 mod config;
@@ -6,12 +8,14 @@ mod geometry;
 mod hotkey;
 mod ocr;
 mod overlay;
+mod tray;
+mod worker;
 
 use anyhow::Result;
 use image::Rgb;
 use imageproc::{drawing::draw_hollow_polygon_mut, point::Point as IPoint};
 
-use crate::{config::AppConfig, hotkey::Hotkeys, ocr::OcrEngine};
+use crate::{config::AppConfig, ocr::OcrEngine, worker::OcrWorker};
 
 fn main() -> Result<()> {
     unsafe {
@@ -29,51 +33,48 @@ fn main() -> Result<()> {
     if std::env::var("SELECTABLE_CPU").is_ok() {
         cfg.use_directml = false;
     }
-    let root = ocr::models_root();
-    let (mut engine, tier) =
-        OcrEngine::load_cascade(&root, &cfg.cascade, cfg.explicit_model.as_deref(), cfg.rec_batch_size, cfg.use_directml)?;
-    println!("selectable: OCR ready (tier={tier})");
 
     if once || image_arg.is_some() {
+        // Synchronous headless path (debug/CI): own engine, no tray.
+        let root = ocr::models_root();
+        let (mut engine, tier) = OcrEngine::load_cascade(
+            &root,
+            &cfg.cascade,
+            cfg.explicit_model.as_deref(),
+            cfg.rec_batch_size,
+            cfg.use_directml,
+        )?;
+        println!("selectable: OCR ready (tier={tier})");
         return oneshot(&mut engine, image_arg);
     }
-    if show_ui || overlay_test {
-        // Debug/e2e path: capture once and show the overlay immediately.
-        let auto = overlay_test.then_some(4000);
-        return capture_and_show(&mut engine, &cfg, auto);
-    }
 
-    let hk = Hotkeys::register_shift_printscreen()?;
-    println!("selectable: press Shift+PrintScreen for overlay, Esc closes it");
-    hk.run_loop(|| {
-        if let Err(e) = capture_and_show(&mut engine, &cfg, None) {
-            eprintln!("capture failed: {e:#}");
-        }
-    });
-    Ok(())
+    // Resident path: worker owns the engine; tray owns the message loop.
+    let worker = OcrWorker::spawn(&cfg);
+    if show_ui || overlay_test {
+        return capture_and_show(&worker, &cfg, overlay_test.then_some(4000));
+    }
+    tray::run_tray(worker, cfg)
 }
 
-fn capture_and_show(engine: &mut OcrEngine, cfg: &AppConfig, autoclose_ms: Option<u32>) -> Result<()> {
+pub(crate) fn capture_and_show(
+    worker: &OcrWorker,
+    cfg: &AppConfig,
+    autoclose_ms: Option<u32>,
+) -> Result<()> {
     let shot = capture::capture_virtual_screen()?;
     // Foreground window is still the user's app here; the overlay pops after.
     let title = overlay::active_window_title();
-    let (lines, t) = engine.run(&shot)?;
-    println!(
-        "timings ms: det pre {:.0} inf {:.0} post {:.0} | rec pre {:.0} inf {:.0} dec {:.0} ({} lines)",
-        t.det_pre_ms, t.det_inf_ms, t.det_post_ms, t.rec_pre_ms, t.rec_inf_ms, t.rec_dec_ms,
-        lines.len()
-    );
+    worker.submit(shot.clone());
     let req = overlay::OverlayRequest {
         shot,
-        lines,
         active_title: title,
         search_url: cfg.search_url.clone(),
         translate_url: cfg.translate_url.clone(),
         save_dir: cfg.save_dir.clone(),
     };
     match autoclose_ms {
-        Some(ms) => overlay::show_overlay_autoclose(req, ms),
-        None => overlay::show_overlay(req),
+        Some(ms) => overlay::show_overlay_autoclose(req, &worker.rx, ms),
+        None => overlay::show_overlay(req, &worker.rx),
     }
 }
 

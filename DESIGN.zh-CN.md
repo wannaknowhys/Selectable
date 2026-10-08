@@ -151,10 +151,9 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
   Session 不出工作线程，保证 `!Send` 安全。
 - **选择模型**：点按（<300ms 且位移<6px）= 选中当前整框；长按拖选 = 字符级区间，
   跨框按阅读顺序拼接；选中区深蓝底白字重绘（字体用 YaHei 近似，字号≈框高）。
-- **B（字符级精度）提案**：Paddle 单字坐标已开源（Apache-2.0，同仓库 `CTCLabelDecode`
-  后处理，非新模型，可直接抄）：用 rec 每个 emit 字符对应的 CTC timestep，
-  映射回 crop 横向区间，再经 perspective 逆变换回屏幕，得到近似字框。
-  长按选字按字框定起止，不再均分。待确认后实施。
+- **B（字符级精度）已实施**：Paddle 单字坐标是 `CTCLabelDecode` 后处理（Apache-2.0，
+  非新模型，已抄入 `decode()`）：每个 emit 字符记录 CTC timestep 跨度→crop 横向比例→
+  行框边插值反推字条，长按按字条定起止，不再均分。横排文字准；竖排回退整框。
 - **Toast**：复制后左下角圆角半透明条，白字显示所复制文字，3 秒淡出（100ms 步进），
   超长截断。
 - **翻译（占位）**：引擎未接，按钮/菜单动作为 toast 提示；状态机已定：
