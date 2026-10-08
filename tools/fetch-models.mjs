@@ -53,8 +53,9 @@ async function fetchTier(lock, tier) {
   fs.mkdirSync(dir, { recursive: true });
   const jobs = [
     ['det', 'det.onnx'],
+    ['det_yml', 'det.yml'],
     ['rec', 'rec.onnx'],
-    ['yml', 'inference.yml'],
+    ['rec_yml', 'rec.yml'],
   ];
   for (const [key, name] of jobs) {
     const s = spec[key];
