@@ -134,8 +134,12 @@ fn parse_dict(text: &str) -> Result<Vec<String>> {
         .context("character_dict not found in rec.yml")?;
     let mut chars = vec!["blank".to_string()];
     for l in lines.iter().skip(start + 1) {
-        let t = l.trim();
-        let Some(v) = t.strip_prefix("- ") else { break };
+        // NOTE: do NOT trim() the line: the U+3000 ideographic-space entry is
+        // "  - \u{3000}", and trim() eats it, silently truncating the dict.
+        let t = l.trim_start_matches(' ');
+        let Some(rest) = t.strip_prefix('-') else { break };
+        // Exactly one ASCII space separates the dash from the scalar.
+        let v = rest.strip_prefix(' ').unwrap_or(rest);
         let v = v.strip_suffix('\'').unwrap_or(v);
         let v = v.strip_prefix('\'').unwrap_or(v);
         // YAML escape for backslash entry appears as `\\`
@@ -316,6 +320,9 @@ impl OcrEngine {
 
             let start = Instant::now();
             for (bi, &ci) in chunk.iter().enumerate() {
+                if std::env::var("SELECTABLE_DEBUG").is_ok() && bi == 0 {
+                    eprintln!("[debug] rec out {:?}, dict len {}", pred.shape(), self.dict.len());
+                }
                 texts[ci] = Some(self.decode(pred.slice(s![bi, .., ..])));
             }
             t.rec_dec_ms += start.elapsed().as_secs_f64() * 1000.0;
@@ -512,5 +519,19 @@ mod tests {
         assert!(lines.len() >= 2, "expected >=2 lines, got {}", lines.len());
         let all: String = lines.iter().map(|l| l.text.clone()).collect();
         assert!(all.len() > 4, "recognized text too short: {all:?}");
+        // The middle line is Chinese: with a truncated dict it decodes empty.
+        assert!(!lines[1].text.is_empty() && lines[1].score > 0.5, "chinese line lost: {all:?}");
+    }
+
+    #[test]
+    fn rec_dict_covers_all_model_classes() {
+        // Regression: a trim() on the U+3000 dict entry once truncated the dict
+        // to 1750/18710 classes, silently dropping spaces, CJK and symbols.
+        let yml = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models/small/rec.yml"),
+        )
+        .expect("run tools/fetch-models.mjs --tier small first");
+        let dict = parse_dict(&yml).expect("parse dict");
+        assert!(dict.len() >= 18710, "dict truncated: {}", dict.len());
     }
 }

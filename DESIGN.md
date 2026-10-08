@@ -141,3 +141,28 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   (`IFileSaveDialog` through the `windows` crate's COM bindings — no hand-rolled UI),
   prefilled with the same default name/folder, png extension.
 - PNG encoding via the `image` crate; failures show a MessageBox and are logged.
+
+## 11. Interaction assembly (M3, decided; item B pending approval)
+
+- **Tray + no console**: `windows_subsystem = "windows"` in release (console kept in
+  debug for logs); hand-rolled `NOTIFYICONDATAW` tray icon, context menu
+  (capture/quit), double-click captures.
+- **Global buttons**: Save/Translate as layered owner-drawn translucent buttons,
+  top-center; after OCR, if they cover text they shift down to free space.
+- **Async flow**: hotkey → overlay pops instantly (screenshot + spinner: 12-segment
+  conic dark-gray-to-transparent ring, 50ms frames) → resident worker-thread OCR →
+  `PostMessage` results back, spinner removed. Sessions never leave the worker thread.
+- **Selection**: click (<300ms, <6px move) selects the whole box; press-drag selects a
+  char range, spanning boxes in reading order; selection redrawn white-on-dark-blue
+  (YaHei approximation, size ≈ box height).
+- **B (char precision) proposal**: Paddle's single-char coordinates are open source
+  (Apache-2.0, same repo, `CTCLabelDecode` post-processing — not a new model — so we
+  can copy it): map each emitted char's CTC timestep back to the crop's x-range, then
+  through the inverse perspective transform to screen char boxes. Implemented on
+  approval.
+- **Toast**: bottom-left rounded translucent strip showing copied text, fades out
+  over 3s (100ms steps), truncated when long.
+- **Translation (placeholder)**: engine not wired yet; actions toast instead. State
+  machine (final): `Translate → (context-menu partial) overlay + "Cancel" → (press)
+  original + "Full" → (press) full overlay + "Cancel" → (press) original + "Full"…`.
+  Only the executor changes when the engine lands.
