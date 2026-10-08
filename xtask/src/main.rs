@@ -1,8 +1,14 @@
-// cargo xtask dist [--debug] [--tier small|medium|all]
+// cargo xtask dist [--debug-only] [--release-only] [--tier small|medium|all]
+// Debug + release are ALWAYS built together (single profile only with -only
+// flags) so both binaries stay fresh for testing. dist/ is assembled from the
+// release binary.
+//
 // Assembles dist/Selectable/ (gitignored green layout):
 //   Selectable.exe + DirectML.dll + models/<tier>/... + config.toml (from example if missing)
 // Missing model tiers present in the repo lock are backfilled via tools/fetch-models.mjs.
 use std::path::{Path, PathBuf};
+
+use anyhow::Context;
 
 fn root() -> PathBuf {
     // xtask lives at <root>/xtask; CARGO_MANIFEST_DIR is compile-time reliable.
@@ -22,9 +28,10 @@ fn run(cmd: &str, args: &[&str], dir: &Path) -> anyhow::Result<()> {
 
 fn copy_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
     if let Some(p) = dst.parent() {
-        std::fs::create_dir_all(p)?;
+        std::fs::create_dir_all(p).with_context(|| format!("mkdir {}", p.display()))?;
     }
-    std::fs::copy(src, dst)?;
+    std::fs::copy(src, dst)
+        .with_context(|| format!("copy {} -> {}", src.display(), dst.display()))?;
     Ok(())
 }
 
@@ -50,22 +57,31 @@ fn triple_complete(dir: &Path) -> bool {
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) != Some("dist") {
-        eprintln!("usage: cargo xtask dist [--debug] [--tier small|medium|all]");
+        eprintln!("usage: cargo xtask dist [--debug-only] [--release-only] [--tier small|medium|all]");
         std::process::exit(2);
     }
-    let debug = args.iter().any(|a| a == "--debug");
+    let debug_only = args.iter().any(|a| a == "--debug-only");
+    let release_only = args.iter().any(|a| a == "--release-only");
     let tier = args.iter().position(|a| a == "--tier").and_then(|i| args.get(i + 1)).cloned();
 
     let root = root();
-    let profile = if debug { "debug" } else { "release" };
 
-    // 1. Build the binary.
-    println!("[xtask] cargo build --profile {profile}");
-    if debug {
-        run("cargo", &["build"], &root)?;
-    } else {
-        run("cargo", &["build", "--release"], &root)?;
+    // 1. Build the binaries: both profiles unless narrowed by -only flags.
+    let profiles: Vec<(&str, Vec<&str>)> = {
+        let mut v = Vec::new();
+        if !release_only {
+            v.push(("debug", vec!["build"]));
+        }
+        if !debug_only {
+            v.push(("release", vec!["build", "--release"]));
+        }
+        v
+    };
+    for (profile, cmd) in &profiles {
+        println!("[xtask] cargo {} ({profile})", cmd.join(" "));
+        run("cargo", cmd, &root)?;
     }
+    let profile = if debug_only { "debug" } else { "release" }; // dist ships release whenever built.
 
     // 2. Backfill models into the repo (dist copies from here).
     let tiers: Vec<String> = match tier.as_deref() {
