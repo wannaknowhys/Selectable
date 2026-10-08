@@ -307,7 +307,14 @@ impl OcrEngine {
 
             let start = Instant::now();
             let mut batch = Array4::<f32>::zeros((chunk.len(), 3, self.rec_h, batch_w));
+            // Content fraction per crop: CTC timesteps span the padded batch
+            // width, but text only occupies the left resized_w part. Without
+            // this correction every char strip shifts left (issue: "alyzer").
+            let mut fracs = Vec::with_capacity(chunk.len());
             for (bi, &ci) in chunk.iter().enumerate() {
+                let ratio = aspect(&crops[ci]);
+                let rw = ((self.rec_h as f32 * ratio).ceil() as usize).min(batch_w).max(1);
+                fracs.push(rw as f32 / batch_w as f32);
                 let norm = rec_preprocess(&crops[ci], self.rec_h, batch_w);
                 batch.slice_mut(s![bi, .., .., ..]).assign(&norm);
             }
@@ -333,7 +340,13 @@ impl OcrEngine {
                 if std::env::var("SELECTABLE_DEBUG").is_ok() && bi == 0 {
                     eprintln!("[debug] rec out {:?}, dict len {}", pred.shape(), self.dict.len());
                 }
-                texts[ci] = Some(self.decode(pred.slice(s![bi, .., ..])));
+                let (text, score, mut chars) = self.decode(pred.slice(s![bi, .., ..]));
+                let f = fracs[bi].max(1e-6);
+                for c in chars.iter_mut() {
+                    c.f0 = (c.f0 / f).min(1.0);
+                    c.f1 = (c.f1 / f).min(1.0);
+                }
+                texts[ci] = Some((text, score, chars));
             }
             t.rec_dec_ms += start.elapsed().as_secs_f64() * 1000.0;
         }

@@ -15,13 +15,13 @@ use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM},
         Graphics::Gdi::{
-            AlphaBlend, BeginPaint, CreateCompatibleBitmap, CreateCompatibleDC,
+            AlphaBlend, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
             CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject,
             DrawTextW, EndPaint, FillRect, GetDC, GetStockObject, SelectClipRgn, SelectObject,
-            SetBkMode, SetTextColor,             StretchDIBits, AC_SRC_OVER, BACKGROUND_MODE, BITMAPINFO, BITMAPINFOHEADER,
+            SetBkMode, SetTextColor, StretchDIBits, AC_SRC_OVER, BACKGROUND_MODE, BITMAPINFO, BITMAPINFOHEADER,
             BI_RGB, BLENDFUNCTION, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
             DEFAULT_QUALITY, DIB_RGB_COLORS, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER,
-            FW_NORMAL, HFONT, HOLLOW_BRUSH, InvalidateRect, OUT_DEFAULT_PRECIS,
+            FW_NORMAL, HBITMAP, HDC, HFONT, HGDIOBJ, HOLLOW_BRUSH, InvalidateRect, OUT_DEFAULT_PRECIS,
             PAINTSTRUCT, PS_DOT, PS_SOLID, Polygon, Rectangle,
             SRCCOPY, TRANSPARENT,
         },
@@ -97,6 +97,47 @@ struct Toast {
     deadline: Instant,
 }
 
+/// Persistent offscreen surface: everything is composed here, then presented
+/// with a single BitBlt (issue #2 — no more direct-to-front flicker).
+struct BackBuf {
+    hdc: HDC,
+    hbmp: HBITMAP,
+    old: HGDIOBJ,
+    w: i32,
+    h: i32,
+}
+
+impl BackBuf {
+    fn new(w: i32, h: i32) -> Result<Self> {
+        unsafe {
+            let screen = GetDC(Some(NULL_HWND));
+            let hdc = CreateCompatibleDC(Some(screen));
+            if hdc.is_invalid() {
+                let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(NULL_HWND), screen);
+                anyhow::bail!("CreateCompatibleDC failed");
+            }
+            let hbmp = CreateCompatibleBitmap(screen, w, h);
+            let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(NULL_HWND), screen);
+            if hbmp.is_invalid() {
+                let _ = DeleteDC(hdc);
+                anyhow::bail!("CreateCompatibleBitmap failed");
+            }
+            let old = SelectObject(hdc, hbmp.into());
+            Ok(Self { hdc, hbmp, old, w, h })
+        }
+    }
+}
+
+impl Drop for BackBuf {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.hdc, self.old);
+            let _ = DeleteObject(self.hbmp.into());
+            let _ = DeleteDC(self.hdc);
+        }
+    }
+}
+
 struct State {
     bgra: Vec<u8>,
     w: u32,
@@ -131,6 +172,7 @@ struct State {
     ox: i32,
     oy: i32,
     mouse: (i32, i32),
+    back: Option<BackBuf>,
     fonts: HashMap<u32, HFONT>,
 }
 
@@ -227,6 +269,7 @@ fn show_overlay_inner(
             ox: vx,
             oy: vy,
             mouse: (0, 0),
+            back: Some(BackBuf::new(vw, vh)?),
             fonts: HashMap::new(),
         });
         layout_buttons(&mut state);
@@ -812,7 +855,9 @@ fn blit_bar(
 fn paint(st: &mut State) {
     unsafe {
         let mut ps: PAINTSTRUCT = std::mem::zeroed();
-        let hdc = BeginPaint(st.hwnd, &mut ps);
+        let front = BeginPaint(st.hwnd, &mut ps);
+        // Compose everything offscreen, present with one blit (issue #2).
+        let hdc = st.back.as_ref().expect("backbuffer").hdc;
         let mut bmi: BITMAPINFO = std::mem::zeroed();
         bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
         bmi.bmiHeader.biWidth = st.w as i32;
@@ -883,6 +928,7 @@ fn paint(st: &mut State) {
             show_toast_paint(hdc, st, &text, alpha);
         }
 
+        let _ = BitBlt(front, 0, 0, st.w as i32, st.h as i32, Some(hdc), 0, 0, SRCCOPY);
         let _ = EndPaint(st.hwnd, &ps);
     }
 }
@@ -1267,6 +1313,7 @@ mod tests {
             dragging: false, toast: None, tmode: TMode::Idle, want_full_label: false,
             translated: None,
             btn_save: (0, 0, 0, 0), btn_tr: (0, 0, 0, 0), ox: 0, oy: 0, mouse: (0, 0),
+            back: None,
             fonts: HashMap::new(),
         }
     }
