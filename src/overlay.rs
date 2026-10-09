@@ -32,7 +32,8 @@ use windows::{
                 FOLDERID_Documents, SHGetKnownFolderPath, ShellExecuteW, KF_FLAG_DEFAULT,
             },
             Controls::Dialogs::{
-                GetSaveFileNameW, OPENFILENAMEW, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST,
+                CommDlgExtendedError, GetSaveFileNameW, OPENFILENAMEW, OFN_OVERWRITEPROMPT,
+                OFN_PATHMUSTEXIST,
             },
             WindowsAndMessaging::{
                 AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
@@ -475,25 +476,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             LRESULT(0)
         }
         WM_COMMAND => {
-            let id = (wp.0 & 0xffff) as usize;
-            match id {
-                M_COPY_SEL => {
-                    let text = selected_text(st);
-                    copy_text(st, &text);
-                }
-                M_COPY_ALL => {
-                    let text = all_text(st);
-                    copy_text(st, &text);
-                }
-                M_SEARCH => open_url(&fill_url(&st.search_url, &selected_or_all(st))),
-                M_TRANSLATE => translate_menu(st),
-                M_SAVE => do_quick_save(st),
-                M_SAVE_AS => do_save_as(st),
-                M_CLOSE => {
-                    let _ = DestroyWindow(hwnd);
-                }
-                _ => {}
-            }
+            // No child controls exist; with TPM_RETURNCMD the popup menu
+            // returns its result directly (see popup_menu), never via here.
             LRESULT(0)
         }
         WM_KEYDOWN => {
@@ -1096,7 +1080,7 @@ fn paint_selection(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
     }
 }
 
-fn popup_menu(st: &State) {
+fn popup_menu(st: &mut State) {
     unsafe {
         let menu = CreatePopupMenu().unwrap_or_default();
         if menu.is_invalid() {
@@ -1113,8 +1097,30 @@ fn popup_menu(st: &State) {
         let mut pt = POINT { x: 0, y: 0 };
         let _ = GetCursorPos(&mut pt);
         let _ = SetForegroundWindow(st.hwnd);
-        let _ = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, None, st.hwnd, None);
+        // NOTE: with TPM_RETURNCMD the choice comes back as the return value;
+        // no WM_COMMAND is generated. Ignoring it (as before) silently drops
+        // every menu action.
+        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, None, st.hwnd, None);
         let _ = DestroyMenu(menu);
+        dlog(format!("menu cmd={} at ({},{})", cmd.0, pt.x, pt.y));
+        match cmd.0 as usize {
+            M_COPY_SEL => {
+                let text = selected_text(st);
+                copy_text(st, &text);
+            }
+            M_COPY_ALL => {
+                let text = all_text(st);
+                copy_text(st, &text);
+            }
+            M_SEARCH => open_url(&fill_url(&st.search_url, &selected_or_all(st))),
+            M_TRANSLATE => translate_menu(st),
+            M_SAVE => do_quick_save(st),
+            M_SAVE_AS => do_save_as(st),
+            M_CLOSE => {
+                let _ = DestroyWindow(st.hwnd);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1246,8 +1252,7 @@ fn save_as_dialog(st: &State) -> Result<Option<std::path::PathBuf>> {
         ofn.lpstrInitialDir = PCWSTR(dir_w.as_ptr());
         ofn.lpstrDefExt = w!("png");
         ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-        if GetSaveFileNameW(&mut ofn).as_bool() {
-            let len = file_buf.iter().position(|&c| c == 0).unwrap_or(0);
+        if GetSaveFileNameW(&mut ofn).as_bool() {            let len = file_buf.iter().position(|&c| c == 0).unwrap_or(0);
             let mut path = std::path::PathBuf::from(String::from_utf16_lossy(&file_buf[..len]));
             if path.extension().is_none() {
                 path.set_extension("png");
@@ -1256,7 +1261,14 @@ fn save_as_dialog(st: &State) -> Result<Option<std::path::PathBuf>> {
             shot.save(&path)?;
             Ok(Some(path))
         } else {
-            Ok(None) // cancelled (or error 0); nothing to report
+            // FALSE means cancel OR error — tell them apart (issue #4).
+            let code = CommDlgExtendedError().0;
+            dlog(format!("save-as dialog result: {code:#X}"));
+            if code == 0 {
+                Ok(None)
+            } else {
+                Err(anyhow::anyhow!("另存为对话框失败 (0x{code:08X})"))
+            }
         }
     }
 }

@@ -37,9 +37,9 @@
 ## #4 右键保存按钮没弹出另存为窗口
 
 - **现象**：右键「保存」按钮无反应。
-- **原因分析**（待验证）：`GetSaveFileNameW` 返回 FALSE 时取消和出错走同一分支，
-  当前直接按"取消"吞掉，真正的错误（`CommDlgExtendedError` 非零，如初始目录非法、
-  文件名缓冲问题）看不见。另有可能是右键命中判定在多屏 origin 下偏了。
-- **方案**：调对话框后立刻查 `CommDlgExtendedError`，非零则 toast 报码；
-  右键命中打点进 `clicks.log`（`SELECTABLE_DEBUG` 门后已有）；真机复现确认弹窗出现。
-- **状态**：待修。
+- **原因（已找到）**：`TrackPopupMenu` 用了 `TPM_RETURNCMD`——选中项走**返回值**，
+  根本不产生 `WM_COMMAND`，旧代码把返回值直接丢了，所有菜单项点了都石沉大海
+  （复制选中/全部没反应同因）。已改成分发返回值，真机验证菜单→保存截图落文件。
+- **还剩一步**：`GetSaveFileNameW` 返回 FALSE 时区分取消/出错（已加
+  `CommDlgExtendedError` 报码+toast），等真机看到一次对话框即可关工单。
+- **状态**：待真机确认。

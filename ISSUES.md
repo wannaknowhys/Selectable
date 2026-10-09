@@ -41,11 +41,11 @@
 ## #4 Right-clicking Save shows no dialog
 
 - **Symptom**: right-click on Save does nothing visible.
-- **Likely causes** (unconfirmed): `GetSaveFileNameW` returning FALSE merges
-  cancel and error into one silent branch — a real error (`CommDlgExtendedError`
-  nonzero, e.g. bad initial dir or filename buffer) is invisible. Hit-testing under
-  multi-monitor origins is a second suspect.
-- **Fix**: query `CommDlgExtendedError` right after the call, toast nonzero codes;
-  right-click hits already log to `clicks.log` (behind `SELECTABLE_DEBUG`);
-  close only after on-device dialog confirmation.
-- **Status**: open.
+- **Root cause (found)**: `TrackPopupMenu` with `TPM_RETURNCMD` returns the choice
+  as its **return value** — no `WM_COMMAND` is ever generated. The old code dropped
+  the return value, so every menu item silently did nothing (same cause behind
+  dead copy-selected/copy-all). Now dispatching on the return value; verified
+  on-device (menu → save lands a file).
+- **Left**: `GetSaveFileNameW` FALSE now distinguishes cancel vs error
+  (`CommDlgExtendedError` + toast). Close after one on-device dialog sighting.
+- **Status**: awaiting on-device confirmation.
