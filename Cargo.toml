@@ -30,8 +30,14 @@ windows = { version = "0.61", features = [
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 anyhow = "1"
-image = "0.25"
+# Only the codecs we ship (PNG now, JPEG with the save-as todo).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 imageproc = "0.25"
 
 [dev-dependencies]
 ab_glyph = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

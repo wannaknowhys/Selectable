@@ -1278,6 +1278,7 @@ fn save_as_dialog(st: &State) -> Result<Option<std::path::PathBuf>> {
         let name = default_filename(&st.title);
         let mut file_buf: Vec<u16> = name.encode_utf16().chain([0]).collect();
         file_buf.resize(1024, 0);
+        // TODO(#5): offer JPEG next to PNG (filter + save branch + quality).
         let filter: Vec<u16> = "PNG 图片\0*.png\0所有文件\0*.*\0\0"
             .encode_utf16()
             .collect();
