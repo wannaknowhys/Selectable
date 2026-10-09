@@ -164,6 +164,7 @@ struct State {
     dragging: bool,
     // UI extras.
     toast: Option<Toast>,
+    toast_level: u8, // last painted fade level; 0xFF forces repaint
     tmode: TMode,
     want_full_label: bool,
     translated: Option<Translated>,
@@ -261,6 +262,7 @@ fn show_overlay_inner(
             cursor: None,
             dragging: false,
             toast: None,
+            toast_level: 0xFF,
             tmode: TMode::Idle,
             want_full_label: false,
             translated: None,
@@ -477,11 +479,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             match id {
                 M_COPY_SEL => {
                     let text = selected_text(st);
-                    finish_copy(st, clipboard::set_text(&text), st.sel.is_some());
+                    copy_text(st, &text);
                 }
                 M_COPY_ALL => {
                     let text = all_text(st);
-                    finish_copy(st, clipboard::set_text(&text), true);
+                    copy_text(st, &text);
                 }
                 M_SEARCH => open_url(&fill_url(&st.search_url, &selected_or_all(st))),
                 M_TRANSLATE => translate_menu(st),
@@ -500,12 +502,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let _ = DestroyWindow(hwnd);
             } else if vk == 0x43 && ctrl_held() {
                 // Explicit copy only (issue #1).
-                let text = selected_text(st);
-                if text.is_empty() {
-                    show_toast(st, "先选中要复制的文字".to_string());
-                } else {
-                    copy_text(st, &text);
-                }
+                copy_text(st, &selected_text(st));
             }
             LRESULT(0)
         }
@@ -562,8 +559,17 @@ fn on_tick(st: &mut State, id: usize) {
     if let Some(t) = &st.toast {
         if Instant::now() >= t.deadline {
             st.toast = None;
+            st.toast_level = 0xFF;
+            dirty = true;
+        } else {
+            // Quantize the fade to 8 levels: ~8 repaints per toast instead of 60.
+            let remain = t.deadline.saturating_duration_since(Instant::now()).as_millis();
+            let level = if remain > 1000 { 8 } else { (remain * 8 / 1000) as u8 + 1 };
+            if level != st.toast_level {
+                st.toast_level = level;
+                dirty = true;
+            }
         }
-        dirty = true;
     }
     if dirty {
         invalidate(st);
@@ -674,17 +680,16 @@ fn count_chars(st: &State) -> usize {
         .unwrap_or(0)
 }
 
+/// THE clipboard choke point: every copy flows through here, and the toast is
+/// built from the exact string handed to the clipboard. Nothing else in the
+/// codebase may call clipboard::set_text.
 fn copy_text(st: &mut State, text: &str) {
+    if text.is_empty() {
+        show_toast(st, "先选中要复制的文字".to_string());
+        return;
+    }
     match clipboard::set_text(text) {
         Ok(_) => show_toast(st, format!("已复制：{}", preview(text, 120))),
-        Err(e) => show_toast(st, format!("复制失败：{e:#}")),
-    }
-}
-
-fn finish_copy(st: &mut State, r: Result<()>, had: bool) {
-    match r {
-        Ok(_) if had => show_toast(st, "已复制".to_string()),
-        Ok(_) => {}
         Err(e) => show_toast(st, format!("复制失败：{e:#}")),
     }
 }
@@ -765,6 +770,7 @@ fn norm_rect(a: (i32, i32), b: (i32, i32)) -> (i32, i32, i32, i32) {
 fn show_toast(st: &mut State, text: String) {
     let now = Instant::now();
     st.toast = Some(Toast { text, deadline: now + Duration::from_secs(3) });
+    st.toast_level = 0xFF; // force first paint
     invalidate(st);
 }
 
@@ -915,11 +921,11 @@ fn paint(st: &mut State) {
             }
         }
 
-        // Toast on top of everything.
+        // Toast on top of everything (alpha from the quantized level).
         let toast_data: Option<(String, u8)> = match &st.toast {
             Some(t) => {
-                let remain = t.deadline.saturating_duration_since(Instant::now());
-                let alpha = if remain.as_millis() > 1000 { 220 } else { (remain.as_millis() * 220 / 1000) as u8 };
+                let a = st.toast_level.min(8);
+                let alpha = if a >= 8 { 220 } else { a * 220 / 8 };
                 Some((t.text.clone(), alpha))
             }
             None => None,
@@ -1310,7 +1316,7 @@ mod tests {
             hwnd: NULL_HWND, vw: 0, vh: 0, rx: std::ptr::null(),
             ready: false, load_error: None, lines: Vec::new(), tier: String::new(),
             spinner: 0, sel: None, press_at: None, anchor: None, cursor: None,
-            dragging: false, toast: None, tmode: TMode::Idle, want_full_label: false,
+            dragging: false, toast: None, toast_level: 0xFF, tmode: TMode::Idle, want_full_label: false,
             translated: None,
             btn_save: (0, 0, 0, 0), btn_tr: (0, 0, 0, 0), ox: 0, oy: 0, mouse: (0, 0),
             back: None,
