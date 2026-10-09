@@ -6,6 +6,7 @@ mod config;
 mod db;
 mod geometry;
 mod hotkey;
+mod monitors;
 mod ocr;
 mod overlay;
 mod tray;
@@ -28,6 +29,13 @@ fn main() -> Result<()> {
     let once = args.iter().any(|a| a == "--once");
     let show_ui = args.iter().any(|a| a == "--overlay");
     let overlay_test = args.iter().any(|a| a == "--overlay-test");
+    // Optional dwell ms: --overlay-test 15000 (default 4000).
+    let dwell_ms = args
+        .iter()
+        .position(|a| a == "--overlay-test")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(4000);
     let image_arg = args.iter().position(|a| a == "--image").and_then(|i| args.get(i + 1)).cloned();
     let mut cfg = AppConfig::load()?;
     if std::env::var("SELECTABLE_CPU").is_ok() {
@@ -51,7 +59,7 @@ fn main() -> Result<()> {
     // Resident path: worker owns the engine; tray owns the message loop.
     let worker = OcrWorker::spawn(&cfg);
     if show_ui || overlay_test {
-        return capture_and_show(&worker, &cfg, overlay_test.then_some(4000));
+        return capture_and_show(&worker, &cfg, overlay_test.then_some(dwell_ms));
     }
     tray::run_tray(worker, cfg)
 }
@@ -64,7 +72,11 @@ pub(crate) fn capture_and_show(
     let shot = capture::capture_virtual_screen()?;
     // Foreground window is still the user's app here; the overlay pops after.
     let title = overlay::active_window_title();
-    worker.submit(shot.clone());
+    if autoclose_ms.is_none() {
+        worker.submit(shot.clone());
+    }
+    // Test mode (--overlay-test): no job submitted, overlay stays in Loading
+    // so the spinner can be inspected.
     let req = overlay::OverlayRequest {
         shot,
         active_title: title,

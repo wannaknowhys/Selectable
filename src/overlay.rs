@@ -16,13 +16,13 @@ use windows::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SYSTEMTIME, WPARAM},
         Graphics::Gdi::{
             AlphaBlend, BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
-            CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject,
-            DrawTextW, EndPaint, FillRect, GetDC, GetStockObject, SelectClipRgn, SelectObject,
+            CreateEllipticRgn, CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject,
+            DrawTextW, EndPaint, FillRect, FillRgn, GetDC, GetStockObject, SelectClipRgn, SelectObject,
             SetBkMode, SetTextColor, StretchDIBits, AC_SRC_OVER, BACKGROUND_MODE, BITMAPINFO, BITMAPINFOHEADER,
             BI_RGB, BLENDFUNCTION, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
             DEFAULT_QUALITY, DIB_RGB_COLORS, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER,
             FW_NORMAL, HBITMAP, HDC, HFONT, HGDIOBJ, HOLLOW_BRUSH, InvalidateRect, OUT_DEFAULT_PRECIS,
-            PAINTSTRUCT, PS_DOT, PS_SOLID, Polygon, Rectangle, RoundRect,
+            PAINTSTRUCT, PS_DOT, PS_SOLID, Rectangle,
             SRCCOPY, TRANSPARENT,
         },
         System::SystemInformation::GetLocalTime,
@@ -53,7 +53,12 @@ use windows::{
     },
 };
 
-use crate::{clipboard, ocr::OcrLine, worker::OcrReply};
+use crate::{
+    clipboard,
+    monitors::{enum_monitors, focus_monitor, Mon},
+    ocr::OcrLine,
+    worker::OcrReply,
+};
 
 const NULL_HWND: HWND = HWND(null_mut());
 const M_COPY_SEL: usize = 2001;
@@ -174,6 +179,8 @@ struct State {
     ox: i32,
     oy: i32,
     mouse: (i32, i32),
+    mons: Vec<Mon>,
+    focus: Mon,
     back: Option<BackBuf>,
     fonts: HashMap<u32, HFONT>,
 }
@@ -230,6 +237,14 @@ fn show_overlay_inner(
         let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
         let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
         let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        // Per-monitor geometry (spinner on every screen, buttons on the focus screen).
+        let mons = enum_monitors(vx, vy, vw, vh);
+        let mut cursor_pt = POINT { x: vx + vw / 2, y: vy + vh / 2 };
+        let mut cpt = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut cpt).is_ok() {
+            cursor_pt = cpt;
+        }
+        let focus = focus_monitor(&mons, (cursor_pt.x, cursor_pt.y));
 
         let (w, h) = req.shot.dimensions();
         let mut bgra = vec![0u8; (w * h * 4) as usize];
@@ -272,6 +287,8 @@ fn show_overlay_inner(
             ox: vx,
             oy: vy,
             mouse: (0, 0),
+            mons,
+            focus,
             back: Some(BackBuf::new(vw, vh)?),
             fonts: HashMap::new(),
         });
@@ -324,17 +341,19 @@ fn layout_buttons(st: &mut State) {
     const BW: i32 = 140;
     const BH: i32 = 44;
     const GAP: i32 = 16;
+    // Buttons live on the focus (cursor) monitor, horizontally centered.
     let total = BW * 2 + GAP;
-    let x0 = (st.vw - total) / 2;
-    let mut y = 24;
+    let x0 = st.focus.cx() - total / 2;
+    let mut y = st.focus.t + 24;
     let rects = [(x0, y, x0 + BW, y + BH), (x0 + BW + GAP, y, x0 + total, y + BH)];
-    // Auto-avoid: if any OCR box overlaps the row, move it near the bottom.
+    // Auto-avoid: if any OCR box overlaps the row, move it near the bottom
+    // of the same monitor.
     for l in &st.lines {
         let (x0b, y0b, x1b, y1b) = l.quad.axis_aligned_bounds();
         let (x0b, y0b, x1b, y1b) = (x0b as i32, y0b as i32, x1b as i32, y1b as i32);
         for r in &rects {
             if x0b < r.2 + 8 && x1b > r.0 - 8 && y0b < r.3 + 8 && y1b > r.1 - 8 {
-                y = st.vh - 140;
+                y = st.focus.b - 140;
                 st.btn_save = (x0, y, x0 + BW, y + BH);
                 st.btn_tr = (x0 + BW + GAP, y, x0 + total, y + BH);
                 return;
@@ -924,18 +943,28 @@ fn paint(st: &mut State) {
 }
 
 fn paint_spinner(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
+    // One spinner per monitor so dual-screen users never stare at a bezel.
+    let centers: Vec<(i32, i32)> = st.mons.iter().map(|m| (m.cx(), m.cy())).collect();
+    for (cx, cy) in centers {
+        draw_spinner_at(hdc, st, cx, cy);
+    }
+}
+
+fn draw_spinner_at(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State, cx: i32, cy: i32) {
     unsafe {
-        let (cx, cy) = (st.vw / 2, st.vh / 2);
+        // NOTE: brush-via-SelectObject fills demonstrably don't stick on this
+        // toolchain (bisected: RoundRect+selected-brush paints border-only,
+        // while FillRgn/FillRect with brush-as-parameter works). So every fill
+        // here goes through FillRgn/FillRect; SelectObject is only used for
+        // pens and fonts (both proven working).
         // Solid dark panel so the spinner reads on any screenshot.
+        let panel_rgn = CreateRoundRectRgn(cx - 130, cy - 85, cx + 130, cy + 85, 24, 24);
         let panel = CreateSolidBrush(COLORREF(0x141414));
-        let old_brush = SelectObject(hdc, panel.into());
-        let old_pen = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
-        let _ = RoundRect(hdc, cx - 130, cy - 85, cx + 130, cy + 85, 24, 24);
-        // White ring.
-        let ring = CreatePen(PS_SOLID, 4, COLORREF(0xFFFFFF));
-        SelectObject(hdc, ring.into());
-        let _ = windows::Win32::Graphics::Gdi::Ellipse(hdc, cx - 44, cy - 52, cx + 44, cy + 36);
-        // 12 orbiting dots, head bright white fading to gray.
+        let _ = FillRgn(hdc, panel_rgn, panel);
+        let _ = DeleteObject(panel.into());
+        let _ = DeleteObject(panel_rgn.into());
+        // 12 orbiting dots, head bright white fading to gray. Dots alone form
+        // the ring; each disc is region-filled (see note above).
         for i in 0..12u32 {
             let k = (i + 12 - st.spinner % 12) % 12;
             let v = (255 - k * 14) as u8;
@@ -946,9 +975,9 @@ fn paint_spinner(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
                 (cx as f32 + a.cos() * 44.0) as i32,
                 ((cy - 8) as f32 + a.sin() * 44.0) as i32,
             );
-            let old_b = SelectObject(hdc, dot_brush.into());
-            let _ = windows::Win32::Graphics::Gdi::Ellipse(hdc, x - 7, y - 7, x + 7, y + 7);
-            SelectObject(hdc, old_b);
+            let dot_rgn = CreateEllipticRgn(x - 7, y - 7, x + 7, y + 7);
+            let _ = FillRgn(hdc, dot_rgn, dot_brush);
+            let _ = DeleteObject(dot_rgn.into());
             let _ = DeleteObject(dot_brush.into());
         }
         // Label under the ring.
@@ -960,10 +989,6 @@ fn paint_spinner(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
         let mut rc = RECT { left: cx - 130, top: cy + 44, right: cx + 130, bottom: cy + 80 };
         DrawTextW(hdc, &mut txt, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(hdc, old_font);
-        SelectObject(hdc, old_pen);
-        SelectObject(hdc, old_brush);
-        let _ = DeleteObject(ring.into());
-        let _ = DeleteObject(panel.into());
     }
 }
 
@@ -987,10 +1012,12 @@ fn show_toast_paint(
     text: &str,
     alpha: u8,
 ) {
-    // Measure with a memory DC is overkill; fixed-height bar, width by chars.
-    let w = (text.chars().count() as i32 * 20 + 48).min(st.vw / 2).max(200);
+    // Fixed-height bar, width by chars, bottom-left of the focus monitor.
+    let w = (text.chars().count() as i32 * 20 + 48)
+        .min((st.focus.r - st.focus.l) / 2)
+        .max(200);
     let h = 52;
-    let r = (24, st.vh - 40 - h, 24 + w, st.vh - 40);
+    let r = (st.focus.l + 24, st.focus.b - 40 - h, st.focus.l + 24 + w, st.focus.b - 40);
     let font = font_for(st, 20);
     unsafe {
         let old = SelectObject(hdc, font.into());
@@ -1005,8 +1032,8 @@ fn paint_translated(
     tr: &Translated,
 ) {
     unsafe {
+        // Fill via brush-as-parameter (SelectObject fills are unreliable here).
         let brush = CreateSolidBrush(COLORREF(0x1E3C1E));
-        let old_brush = SelectObject(hdc, brush.into());
         let old_bk = SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(0xFFFFFF));
         let jobs: Vec<((u32, u32, u32, u32), String)> = st
@@ -1017,13 +1044,8 @@ fn paint_translated(
             .map(|(l, t)| (l.quad.axis_aligned_bounds(), t.clone()))
             .collect();
         for ((x0, y0, x1, y1), t) in jobs {
-            let pts = [
-                POINT { x: x0 as i32, y: y0 as i32 },
-                POINT { x: x1 as i32, y: y0 as i32 },
-                POINT { x: x1 as i32, y: y1 as i32 },
-                POINT { x: x0 as i32, y: y1 as i32 },
-            ];
-            let _ = Polygon(hdc, &pts);
+            let frc = RECT { left: x0 as i32, top: y0 as i32, right: x1 as i32, bottom: y1 as i32 };
+            FillRect(hdc, &frc, brush);
             let font = font_for(st, (y1 - y0).saturating_sub(4).max(12));
             let old_font = SelectObject(hdc, font.into());
             let mut txt: Vec<u16> = t.encode_utf16().collect();
@@ -1032,7 +1054,6 @@ fn paint_translated(
             SelectObject(hdc, old_font);
         }
         SetBkMode(hdc, BACKGROUND_MODE(old_bk as u32));
-        SelectObject(hdc, old_brush);
         let _ = DeleteObject(brush.into());
     }
 }
@@ -1040,8 +1061,8 @@ fn paint_translated(
 fn paint_selection(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
     let Some((a, b)) = st.sel else { return };
     unsafe {
+        // FillRect with brush-as-parameter (see note in draw_spinner_at).
         let brush = CreateSolidBrush(COLORREF(0xAD4600)); // dark blue (0x00BBGGRR)
-        let old_brush = SelectObject(hdc, brush.into());
         let old_bk = SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(0xFFFFFF));
         let ((l0, c0), (l1, c1)) = (a, b);
@@ -1075,17 +1096,17 @@ fn paint_selection(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
                 }
             };
             for (text, pts, h) in strips {
-                let ipts = [
-                    POINT { x: pts[0][0] as i32, y: pts[0][1] as i32 },
-                    POINT { x: pts[1][0] as i32, y: pts[1][1] as i32 },
-                    POINT { x: pts[2][0] as i32, y: pts[2][1] as i32 },
-                    POINT { x: pts[3][0] as i32, y: pts[3][1] as i32 },
-                ];
-                let _ = Polygon(hdc, &ipts);
+                let xs = [pts[0][0] as i32, pts[1][0] as i32, pts[2][0] as i32, pts[3][0] as i32];
+                let ys = [pts[0][1] as i32, pts[1][1] as i32, pts[2][1] as i32, pts[3][1] as i32];
+                let mut rc = RECT {
+                    left: *xs.iter().min().unwrap(),
+                    top: *ys.iter().min().unwrap(),
+                    right: *xs.iter().max().unwrap(),
+                    bottom: *ys.iter().max().unwrap(),
+                };
+                FillRect(hdc, &rc, brush);
                 let font = font_for(st, h.saturating_sub(2).max(12));
                 let old_font = SelectObject(hdc, font.into());
-                let xs = [ipts[0].x, ipts[1].x, ipts[2].x, ipts[3].x];
-                let ys = [ipts[0].y, ipts[1].y, ipts[2].y, ipts[3].y];
                 let mut rc = RECT {
                     left: *xs.iter().min().unwrap(),
                     top: *ys.iter().min().unwrap(),
@@ -1098,7 +1119,6 @@ fn paint_selection(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
             }
         }
         SetBkMode(hdc, BACKGROUND_MODE(old_bk as u32));
-        SelectObject(hdc, old_brush);
         let _ = DeleteObject(brush.into());
     }
 }
@@ -1354,6 +1374,8 @@ mod tests {
             dragging: false, toast: None, toast_level: 0xFF, tmode: TMode::Idle, want_full_label: false,
             translated: None,
             btn_save: (0, 0, 0, 0), btn_tr: (0, 0, 0, 0), ox: 0, oy: 0, mouse: (0, 0),
+            mons: vec![crate::monitors::Mon { l: 0, t: 0, r: 1920, b: 1080, primary: true }],
+            focus: crate::monitors::Mon { l: 0, t: 0, r: 1920, b: 1080, primary: true },
             back: None,
             fonts: HashMap::new(),
         }
@@ -1385,5 +1407,139 @@ mod tests {
         assert_eq!(range_text(&st, ((0, 1), (0, 3))), "bc");
         assert_eq!(range_text(&st, ((0, 2), (1, 2))), "cd\n截屏");
         assert_eq!(range_text(&st, ((1, 0), (1, 1))), "截");
+    }
+
+    #[test]
+    fn spinner_frame_is_visible() {        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleBitmap, CreateCompatibleDC, CreateRoundRectRgn, DeleteDC, DeleteObject,
+            FillRect, FillRgn, GetDC, GetDIBits, GetStockObject, SelectObject, BITMAPINFO,
+            BITMAPINFOHEADER, BI_RGB, BLACK_PEN, DIB_RGB_COLORS, HOLLOW_BRUSH, WHITE_BRUSH,
+        };
+        unsafe {
+            // Offscreen canvas with a light background (worst case for white art).
+            let screen = GetDC(Some(NULL_HWND));
+            let mem = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, 400, 300);
+            let old = SelectObject(mem, bmp.into());
+            let white = CreateSolidBrush(COLORREF(0xFFFFFF));
+            let mut rc = RECT { left: 0, top: 0, right: 400, bottom: 300 };
+            FillRect(mem, &rc, white);
+            let _ = DeleteObject(white.into());
+
+            let mut st = toy_state();
+            st.mons = vec![crate::monitors::Mon { l: 0, t: 0, r: 400, b: 300, primary: true }];
+            draw_spinner_at(mem, &mut st, 200, 150);
+
+            // Read back and check: dark panel pixels must exist, plus bright ones.
+            let mut bmi: BITMAPINFO = std::mem::zeroed();
+            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            bmi.bmiHeader.biWidth = 400;
+            bmi.bmiHeader.biHeight = -300;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB.0 as u32;
+            let mut buf = vec![0u8; 400 * 300 * 4];
+            assert!(GetDIBits(mem, bmp, 0, 300, Some(buf.as_mut_ptr() as *mut _), &mut bmi, DIB_RGB_COLORS) > 0);
+            let (mut dark, mut bright) = (0, 0);
+            for px in buf.chunks_exact(4) {
+                let lum = px[0] as u32 + px[1] as u32 + px[2] as u32;
+                if lum < 120 {
+                    dark += 1;
+                }
+                if lum > 700 {
+                    bright += 1;
+                }
+            }
+            eprintln!("spinner pixels: dark={dark} bright={bright}");
+            // Persist the frame for eyeballing (temp/ is gitignored).
+            let mut img = image::RgbImage::new(400, 300);
+            for (i, p) in img.pixels_mut().enumerate() {
+                let o = i * 4;
+                p.0 = [buf[o + 2], buf[o + 1], buf[o]];
+            }
+            let _ = img.save("temp/spinner.png");
+            assert!(dark > 5000, "panel did not paint dark");
+            assert!(bright > 200, "ring/dots/label missing");
+            SelectObject(mem, old);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mem);
+            let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(NULL_HWND), screen);
+        }
+    }
+
+    /// Bisect: which fill primitive actually darkens pixels on this toolchain?
+    #[test]
+    fn gdi_fill_bisect() {
+        use windows::Win32::Graphics::Gdi::*;
+        unsafe {
+            let screen = GetDC(Some(NULL_HWND));
+            for (name, draw) in [
+                ("rr_solid", 0),
+                ("rr_stockwhite", 1),
+                ("fillrgn_round", 2),
+                ("fillrect_dark", 3),
+            ] {
+                let mem = CreateCompatibleDC(Some(screen));
+                let bmp = CreateCompatibleBitmap(screen, 200, 150);
+                let old = SelectObject(mem, bmp.into());
+                // white bg
+                let white = CreateSolidBrush(COLORREF(0xFFFFFF));
+                let mut rc = RECT { left: 0, top: 0, right: 200, bottom: 150 };
+                FillRect(mem, &rc, white);
+                let _ = DeleteObject(white.into());
+                if draw == 0 {
+                    // Variant A: created dark brush + hollow pen, like the spinner.
+                    let b = CreateSolidBrush(COLORREF(0x141414));
+                    let ob = SelectObject(mem, b.into());
+                    let op = SelectObject(mem, GetStockObject(HOLLOW_BRUSH));
+                    let r = RoundRect(mem, 20, 20, 180, 130, 16, 16);
+                    eprintln!("{name}: roundrect_ok={} brush_null={} ob_null={} op_null={} brush={:?} hollow={:?}",
+                        r.as_bool(), b.is_invalid(),
+                        ob.0.is_null(), op.0.is_null(), b.0, GetStockObject(HOLLOW_BRUSH).0);
+                    SelectObject(mem, op);
+                    SelectObject(mem, ob);
+                    let _ = DeleteObject(b.into());
+                } else if draw == 1 {
+                    // Variant B: stock white brush + stock black pen.
+                    let ob = SelectObject(mem, GetStockObject(WHITE_BRUSH));
+                    let op = SelectObject(mem, GetStockObject(BLACK_PEN));
+                    let r = RoundRect(mem, 20, 20, 180, 130, 16, 16);
+                    eprintln!("{name}: roundrect_ok={} ", r.as_bool());
+                    SelectObject(mem, op);
+                    SelectObject(mem, ob);
+                } else if draw == 2 {
+                    // Variant C: region fill, brush passed as parameter (no select).
+                    let rgn = CreateRoundRectRgn(20, 20, 180, 130, 16, 16);
+                    let b = CreateSolidBrush(COLORREF(0x141414));
+                    let n = FillRgn(mem, rgn, b);
+                    eprintln!("{name}: fillrgn_ok={} rgn_null={}", n.as_bool(), rgn.is_invalid());
+                    let _ = DeleteObject(rgn.into());
+                    let _ = DeleteObject(b.into());
+                } else {
+                    // Variant D: plain rect fill, brush as parameter.
+                    let b = CreateSolidBrush(COLORREF(0x141414));
+                    let rc2 = RECT { left: 20, top: 20, right: 180, bottom: 130 };
+                    let n = FillRect(mem, &rc2, b);
+                    eprintln!("{name}: fillrect_n={n}");
+                    let _ = DeleteObject(b.into());
+                }
+                // read back dark count
+                let mut bmi: BITMAPINFO = std::mem::zeroed();
+                bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+                bmi.bmiHeader.biWidth = 200;
+                bmi.bmiHeader.biHeight = -150;
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;
+                bmi.bmiHeader.biCompression = BI_RGB.0 as u32;
+                let mut buf = vec![0u8; 200 * 150 * 4];
+                GetDIBits(mem, bmp, 0, 150, Some(buf.as_mut_ptr() as *mut _), &mut bmi, DIB_RGB_COLORS);
+                let dark = buf.chunks_exact(4).filter(|px| (px[0] as u32 + px[1] as u32 + px[2] as u32) < 120).count();
+                eprintln!("{name}: dark={dark}");
+                SelectObject(mem, old);
+                let _ = DeleteObject(bmp.into());
+                let _ = DeleteDC(mem);
+            }
+            let _ = ReleaseDC(Some(NULL_HWND), screen);
+        }
     }
 }
