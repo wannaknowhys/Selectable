@@ -22,7 +22,7 @@ use windows::{
             BI_RGB, BLENDFUNCTION, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
             DEFAULT_QUALITY, DIB_RGB_COLORS, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER,
             FW_NORMAL, HBITMAP, HDC, HFONT, HGDIOBJ, HOLLOW_BRUSH, InvalidateRect, OUT_DEFAULT_PRECIS,
-            PAINTSTRUCT, PS_DOT, PS_SOLID, Polygon, Rectangle,
+            PAINTSTRUCT, PS_DOT, PS_SOLID, Polygon, Rectangle, RoundRect,
             SRCCOPY, TRANSPARENT,
         },
         System::SystemInformation::GetLocalTime,
@@ -923,24 +923,47 @@ fn paint(st: &mut State) {
     }
 }
 
-fn paint_spinner(hdc: windows::Win32::Graphics::Gdi::HDC, st: &State) {
+fn paint_spinner(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
     unsafe {
         let (cx, cy) = (st.vw / 2, st.vh / 2);
+        // Solid dark panel so the spinner reads on any screenshot.
+        let panel = CreateSolidBrush(COLORREF(0x141414));
+        let old_brush = SelectObject(hdc, panel.into());
+        let old_pen = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+        let _ = RoundRect(hdc, cx - 130, cy - 85, cx + 130, cy + 85, 24, 24);
+        // White ring.
+        let ring = CreatePen(PS_SOLID, 4, COLORREF(0xFFFFFF));
+        SelectObject(hdc, ring.into());
+        let _ = windows::Win32::Graphics::Gdi::Ellipse(hdc, cx - 44, cy - 52, cx + 44, cy + 36);
+        // 12 orbiting dots, head bright white fading to gray.
         for i in 0..12u32 {
-            // Conic fade: newest segment brightest.
             let k = (i + 12 - st.spinner % 12) % 12;
-            let v = (70 + k * 15) as u8;
-            let brush = CreateSolidBrush(COLORREF((v as u32) | ((v as u32) << 8) | ((v as u32) << 16)));
+            let v = (255 - k * 14) as u8;
+            let dot_brush =
+                CreateSolidBrush(COLORREF((v as u32) | ((v as u32) << 8) | ((v as u32) << 16)));
             let a = (st.spinner as f32 * 30.0 + i as f32 * 30.0).to_radians();
-            let (x, y) = ((cx as f32 + a.cos() * 30.0) as i32, (cy as f32 + a.sin() * 30.0) as i32);
-            let _ = windows::Win32::Graphics::Gdi::Ellipse(hdc, x - 6, y - 6, x + 6, y + 6);
-            let old = SelectObject(hdc, brush.into());
-            let _ = DeleteObject(brush.into());
-            let _ = old;
+            let (x, y) = (
+                (cx as f32 + a.cos() * 44.0) as i32,
+                ((cy - 8) as f32 + a.sin() * 44.0) as i32,
+            );
+            let old_b = SelectObject(hdc, dot_brush.into());
+            let _ = windows::Win32::Graphics::Gdi::Ellipse(hdc, x - 7, y - 7, x + 7, y + 7);
+            SelectObject(hdc, old_b);
+            let _ = DeleteObject(dot_brush.into());
         }
-        // Re-select a stock brush to avoid leaking the DC state (paint restores anyway).
-        let hollow = GetStockObject(HOLLOW_BRUSH);
-        SelectObject(hdc, hollow);
+        // Label under the ring.
+        let font = font_for(st, 22);
+        let old_font = SelectObject(hdc, font.into());
+        SetTextColor(hdc, COLORREF(0xFFFFFF));
+        SetBkMode(hdc, TRANSPARENT);
+        let mut txt: Vec<u16> = "识别中…".encode_utf16().collect();
+        let mut rc = RECT { left: cx - 130, top: cy + 44, right: cx + 130, bottom: cy + 80 };
+        DrawTextW(hdc, &mut txt, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, old_font);
+        SelectObject(hdc, old_pen);
+        SelectObject(hdc, old_brush);
+        let _ = DeleteObject(ring.into());
+        let _ = DeleteObject(panel.into());
     }
 }
 

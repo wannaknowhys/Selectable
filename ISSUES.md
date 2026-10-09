@@ -30,13 +30,11 @@
 ## #3 Loading spinner seemingly never drawn
 
 - **Symptom**: no spinner visible after the hotkey.
-- **Likely causes** (unconfirmed): the spinner timer/paint path works
-  (`--overlay-test` logs paints), but 12 small gray dots are near-invisible over a
-  busy screenshot; on small/fast shots it also flashes by. Possibly not drawn at
-  all on some machines — instrument first, conclude later.
-- **Fix**: bigger/bolder spinner + white ring + centered "recognizing…" text;
-  timing logs behind `SELECTABLE_DEBUG`; close only after on-device confirmation.
-- **Status**: open.
+- **Done**: upgraded to a dark rounded panel + white ring + 12 large white-to-gray
+  gradient dots + centered "recognizing…" label (the old 12 small gray dots were
+  indeed near-invisible over busy screenshots). Same proven primitives as
+  buttons/toast.
+- **Status**: awaiting on-device sighting (visible on any slow recognition).
 
 ## #4 Right-clicking Save shows no dialog
 
@@ -48,4 +46,4 @@
   on-device (menu → save lands a file).
 - **Left**: `GetSaveFileNameW` FALSE now distinguishes cancel vs error
   (`CommDlgExtendedError` + toast). Close after one on-device dialog sighting.
-- **Status**: awaiting on-device confirmation.
+- **Status**: closed (confirmed on-device: menu copy and Save → save-as dialog both work).
