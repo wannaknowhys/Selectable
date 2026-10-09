@@ -109,8 +109,6 @@ struct BackBuf {
     hdc: HDC,
     hbmp: HBITMAP,
     old: HGDIOBJ,
-    w: i32,
-    h: i32,
 }
 
 impl BackBuf {
@@ -129,7 +127,7 @@ impl BackBuf {
                 anyhow::bail!("CreateCompatibleBitmap failed");
             }
             let old = SelectObject(hdc, hbmp.into());
-            Ok(Self { hdc, hbmp, old, w, h })
+            Ok(Self { hdc, hbmp, old })
         }
     }
 }
@@ -150,11 +148,11 @@ struct State {
     h: u32,
     title: String,
     search_url: String,
+    // Phase: Bergamot engine wiring.
+    #[allow(dead_code)]
     translate_url: String,
     save_dir: Option<String>,
     hwnd: HWND,
-    vw: i32,
-    vh: i32,
     // Async OCR.
     rx: *const std::sync::mpsc::Receiver<OcrReply>,
     ready: bool,
@@ -264,8 +262,6 @@ fn show_overlay_inner(
             translate_url: req.translate_url,
             save_dir: req.save_dir,
             hwnd: NULL_HWND,
-            vw,
-            vh,
             rx: rx as *const _,
             ready: false,
             load_error: None,
@@ -311,7 +307,7 @@ fn show_overlay_inner(
         state.hwnd = hwnd;
         std::mem::forget(state);
         // Explicit show + topmost (belt and suspenders for exotic shells).
-        unsafe {
+        {
             use windows::Win32::UI::WindowsAndMessaging::{
                 SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
                 SWP_SHOWWINDOW,
@@ -1098,13 +1094,13 @@ fn paint_selection(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
             for (text, pts, h) in strips {
                 let xs = [pts[0][0] as i32, pts[1][0] as i32, pts[2][0] as i32, pts[3][0] as i32];
                 let ys = [pts[0][1] as i32, pts[1][1] as i32, pts[2][1] as i32, pts[3][1] as i32];
-                let mut rc = RECT {
+                let frc = RECT {
                     left: *xs.iter().min().unwrap(),
                     top: *ys.iter().min().unwrap(),
                     right: *xs.iter().max().unwrap(),
                     bottom: *ys.iter().max().unwrap(),
                 };
-                FillRect(hdc, &rc, brush);
+                FillRect(hdc, &frc, brush);
                 let font = font_for(st, h.saturating_sub(2).max(12));
                 let old_font = SelectObject(hdc, font.into());
                 let mut rc = RECT {
@@ -1368,7 +1364,7 @@ mod tests {
         State {
             bgra: Vec::new(), w: 0, h: 0, title: String::new(),
             search_url: String::new(), translate_url: String::new(), save_dir: None,
-            hwnd: NULL_HWND, vw: 0, vh: 0, rx: std::ptr::null(),
+            hwnd: NULL_HWND, rx: std::ptr::null(),
             ready: false, load_error: None, lines: Vec::new(), tier: String::new(),
             spinner: 0, sel: None, press_at: None, anchor: None, cursor: None,
             dragging: false, toast: None, toast_level: 0xFF, tmode: TMode::Idle, want_full_label: false,
@@ -1411,9 +1407,8 @@ mod tests {
 
     #[test]
     fn spinner_frame_is_visible() {        use windows::Win32::Graphics::Gdi::{
-            CreateCompatibleBitmap, CreateCompatibleDC, CreateRoundRectRgn, DeleteDC, DeleteObject,
-            FillRect, FillRgn, GetDC, GetDIBits, GetStockObject, SelectObject, BITMAPINFO,
-            BITMAPINFOHEADER, BI_RGB, BLACK_PEN, DIB_RGB_COLORS, HOLLOW_BRUSH, WHITE_BRUSH,
+            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, FillRect, GetDC,
+            GetDIBits, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
         };
         unsafe {
             // Offscreen canvas with a light background (worst case for white art).
@@ -1422,7 +1417,7 @@ mod tests {
             let bmp = CreateCompatibleBitmap(screen, 400, 300);
             let old = SelectObject(mem, bmp.into());
             let white = CreateSolidBrush(COLORREF(0xFFFFFF));
-            let mut rc = RECT { left: 0, top: 0, right: 400, bottom: 300 };
+            let rc = RECT { left: 0, top: 0, right: 400, bottom: 300 };
             FillRect(mem, &rc, white);
             let _ = DeleteObject(white.into());
 
@@ -1484,7 +1479,7 @@ mod tests {
                 let old = SelectObject(mem, bmp.into());
                 // white bg
                 let white = CreateSolidBrush(COLORREF(0xFFFFFF));
-                let mut rc = RECT { left: 0, top: 0, right: 200, bottom: 150 };
+                let rc = RECT { left: 0, top: 0, right: 200, bottom: 150 };
                 FillRect(mem, &rc, white);
                 let _ = DeleteObject(white.into());
                 if draw == 0 {

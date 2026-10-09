@@ -86,7 +86,12 @@ pub fn focus_monitor(mons: &[Mon], cursor: (i32, i32)) -> Mon {
             return m;
         }
     }
-    mons.iter().find(|m| m.contains(cursor.0, cursor.1)).copied().unwrap_or(mons[0])
+    mons
+        .iter()
+        .find(|m| m.contains(cursor.0, cursor.1))
+        .copied()
+        .or_else(|| mons.iter().find(|m| m.primary).copied())
+        .unwrap_or(mons[0])
 }
 
 #[cfg(test)]

@@ -16,6 +16,8 @@ pub struct OcrJob {
 
 pub struct OcrReply {
     pub lines: Vec<OcrLine>,
+    // Phase: overlay status line with timings.
+    #[allow(dead_code)]
     pub timings: OcrTimings,
     pub tier: String,
     pub error: Option<String>,

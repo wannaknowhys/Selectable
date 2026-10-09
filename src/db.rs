@@ -21,6 +21,8 @@ pub struct DbParams {
 
 pub struct DbCandidate {
     pub bbox: Quad,
+    // Phase: overlay confidence display.
+    #[allow(dead_code)]
     pub score: f32,
 }
 

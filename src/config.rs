@@ -99,6 +99,8 @@ struct SaveSection {
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
+    // Phase: options UI (hotkey remapping).
+    #[allow(dead_code)]
     pub combos: Vec<String>,
     pub explicit_model: Option<String>,
     pub cascade: Vec<String>,
