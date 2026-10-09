@@ -160,3 +160,97 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
   `翻译 →（右键部分翻译）覆盖+按钮变"取消翻译" →（按）回原文+按钮变"全文翻译"`
   `→（按）全文覆盖+按钮变"取消翻译" →（按）回原文+"全文翻译"…`。
   引擎落地后只换执行函数，状态机不动。
+
+## 12. 翻译子系统（M4，实施顺序即清单）
+
+> 路线：A（Bergamot 原生静态库 + 薄 C shim + cmake），Windows runner 出包。
+> 模型 MPL-2.0（见仓库根 LICENSE 考证），分发合规动作见 §12.7。
+
+### 12.1 语种判定（OCR 结果 → 源语言）
+
+- v1 用**字形启发式**（零依赖、离线）：含平假名/片假名→ja，含谚文→ko，
+  含西里尔→ru，含 CJK 汉字→zh，其余拉丁→en（可配置默认）。
+- 繁简不分（z哼模型按 zh 统一处理，字典/行为以实测为准）；置信度低或混合文本
+  取占比最高的脚本；`config.toml [translate] source_lang` 可强制指定，覆盖自动判定。
+
+### 12.2 目标语言
+
+- 默认 `target_lang = "auto"`：取系统 locale 主语言（`GetUserDefaultLocaleName`，
+  如 zh-CN→zh），映射到 Bergamot 方向码；配置文件可覆盖为固定值。
+- 源语言 == 目标语言 → 不翻译，toast「无需翻译」。
+
+### 12.3 语对解析与模型获取
+
+- 方向名 `{src}{tgt}`（如 enzh、zhen）。启动/触发时查本地 `models/translate/{pair}/`
+  是否齐套（model + vocab + shortlist + config）。
+- 缺失 → 查 Mozilla registry（`models.lock.json` 已有地址，版本 pin 死）该方向是否存在：
+  不存在 → toast「暂不支持该语种组合」；存在 → 进 §12.4 下载流程。
+- 首版 zip 只带 enzh/zhen（见 §12.7 打包）。
+
+### 12.4 下载进度 UI（复用 loading 区）
+
+- 触发翻译且模型缺失时，Overlay 中央转圈区切换为**下载进度条**（圆角条 + 百分比文字）
+  + 一个**取消按钮**（与保存/翻译同套自绘按钮）。
+- 下载器走 WinHTTP（`windows` crate `Win32_Networking_WinHttp`，零第三方依赖，
+  与全仓零依赖原则一致），按块读并上报字节进度，原子 flag 做取消；
+  取消后删残缺文件，回到 idle 状态。registry 若给 hash/size 则校验。
+- 下载完成 → 同一次触发内直接进翻译，不用用户再按一次。
+
+### 12.5 翻译执行
+
+- 常驻工作线程执行（与 OCR worker 同模式，Session/模型不出线程）；
+  UI 照旧 50ms 轮询。CJK 先按 `。！？!?\n…` 分句再送模型，拉丁按常规断句。
+- 结果进现有部分/全文覆盖渲染与状态机（代码已就绪，`translate_engine` 换实即可）。
+
+### 12.6 Bergamot 构建（路线 A）
+
+- 第三方源码 `third_party/bergamot-translator` 做 git submodule（pin rev，
+  起点用 translateLocally 验证过的 `9271618`），
+  另加我们自己的薄 C shim（C ABI，`translate_init/open/translate/close` 四个函数）。
+- `cargo xtask build-translate` 调 cmake（MSVC 本地 / runner 同一套，不在 YAML 里写第二遍）；
+  Rust 侧手写 `extern "C"` 绑定 + `cargo:rustc-link-lib=static`。
+- **Windows 配方的关键（抄 translateLocally 的作业，不抄它的 Qt）**：
+  - MKL 用预编译静态包直链（`mkl-2020.1-windows-static.zip`，解压设 `MKLROOT` 即可，
+    不装 Intel 全家桶；OpenBLAS 明确不用，短句场景会慢一个数量级）；
+  - vcpkg（runner 自带，本地需装）只装 `protobuf/pcre2`（`x64-windows-static`，
+    release-only），Qt/GUI/CLI 相关一律不要——我们只要 translator 核心库；
+  - `cmake -DUSE_STATIC_LIBS=ON -DBUILD_ARCH=x86-64`（基线 x64 兼容优先，
+    intgemm 运行时自己 dispatch，avx 变体以后再说）；
+  - 他们的 `cmake/` 目录有零星 Windows 修正，spike 时按需取用并署名
+    （该仓 MIT，比 MPL 还松）。
+- 先做 spike：本机 Windows 编过 + 翻一句中英。若上游主分支 Windows 撑不住，
+  fallback 改 translateLocally 的 fork 布局（同样 cmake+MSVC，有 Windows 发行版先例），
+- 构建产物（静态库）不进 git；CI 缓存 cmake 构建目录加速。
+
+### 12.7 打包与合规
+
+- release 共 6 个 zip：binary、binary+small、binary+medium、small、medium、
+  translate-models（enzh+zhen，首版仅此）。版本号唯一真相源 `Cargo.toml`，
+  打 `v*` tag 触发；包名带版本+平台，附 `SHA256SUMS`。
+- CI 一律调 xtask（`build-translate` → `dist --release-only --tier all`），
+  本地/CI 同一条路；翻译模型由 xtask 在 CI 内从 registry 拉取后打第 6 包。
+  CI 只跑 `windows-latest`（见 §12.6，Linux 编 Win32/MSVC/ORT/DirectML 是自虐）。
+- 首版第 6 包只含 enzh+zhen（决议：日韩等方向走运行时按需下载，不进包；
+  管道与测试与语种无关，加包只是下载量问题，有真实需求再加）。
+- 合规：新增 `THIRD-PARTY-NOTICES`（模型 mozilla/firefox-translations-models、
+  库 browsermt/bergamot-translator，MPL-2.0 全文链接，EU grant 署名），
+  进仓库 + 每个 zip 一份；About 页同样署名。
+- exe 无签名，release notes 先写明 SmartScreen 提示。
+
+### 12.8 语种下拉框（逃生通道，已定）
+
+- Overlay 翻译行扩展为 `[源下拉][目标下拉][翻译]`：源默认 `Auto（本次判定：xx）`，
+  目标默认系统 locale；两个都是标准 Win32 COMBOBOX 子窗口（`CBS_DROPDOWNLIST`，
+  原生外观键盘可用，比自绘省事），选项= registry 实际存在的方向并集。
+- 任一下拉改动 → 重走 §12.3 resolve（本地有则直接翻，没有则下载/报不支持）；
+  与自动判定冲突时手动选择优先，本次 Overlay 有效（config 不自动改写）。
+
+### 12.9 实施顺序
+1. spike：本机编过 + 翻一句（定 fallback）。
+2. submodule + C shim + Rust FFI + `xtask build-translate`（本地/CI 同路）。
+3. `models.lock` 翻译词条 + dev 拉取 + 运行时 WinHTTP 下载器（含取消）。
+4. 语种判定 + 目标解析 + 语对 resolve。
+5. 下载进度 UI + 取消按钮。
+6. 工作线程翻译 + 状态机激活 + 语种下拉框 UI（覆盖渲染已就绪）。
+7. THIRD-PARTY-NOTICES + About + 文档。
+8. CI YAML：tag 触发，6 包 + SHA256SUMS。

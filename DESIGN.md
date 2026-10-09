@@ -166,3 +166,97 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   machine (final): `Translate → (context-menu partial) overlay + "Cancel" → (press)
   original + "Full" → (press) full overlay + "Cancel" → (press) original + "Full"…`.
   Only the executor changes when the engine lands.
+
+## 12. Translation subsystem (M4; order below is the build sequence)
+
+> Route: A (native Bergamot static lib + thin C shim + cmake), Windows runners.
+> Models are MPL-2.0 (see repo-root LICENSE research); compliance in §12.7.
+
+### 12.1 Source language (from OCR text)
+
+- v1 uses a **script heuristic** (zero deps, offline): Hiragana/Katakana → ja,
+  Hangul → ko, Cyrillic → ru, Han → zh, otherwise Latin → en (configurable default).
+- No Hans/Hant split (zh handled as one); low-confidence/mixed text takes the
+  dominant script; `config.toml [translate] source_lang` overrides auto-detect.
+
+### 12.2 Target language
+
+- Default `target_lang = "auto"`: system locale primary subtag
+  (`GetUserDefaultLocaleName`, e.g. zh-CN → zh), mapped to Bergamot codes;
+  overridable in config. Source == target → toast "nothing to translate".
+
+### 12.3 Pair resolution & model fetch
+
+- Direction name `{src}{tgt}` (enzh, zhen). Check local
+  `models/translate/{pair}/` (model + vocab + shortlist + config) on trigger.
+- If missing, look the direction up in the Mozilla registry (pinned in
+  `models.lock.json`): absent → toast "pair not supported"; present → §12.4.
+- v1 zips ship enzh/zhen only (§12.7).
+
+### 12.4 Download progress UI (reuses the loading area)
+
+- When translation needs missing models, the spinner area becomes a **progress
+  bar** (rounded bar + percent) plus a **Cancel button** (same owner-drawn style).
+- Downloader over WinHTTP (`windows` crate `Win32_Networking_WinHttp`, zero
+  third-party deps), chunked reads with byte progress, atomic-flag cancel;
+  partials deleted on cancel; registry hashes/sizes verified when provided.
+- After download, translation proceeds in the same trigger — no second press.
+
+### 12.5 Translation execution
+
+- Runs on the resident worker thread (same pattern as OCR); UI polls at 50ms.
+  CJK pre-split on `。！？!?\n…`, Latin on normal sentence breaks.
+- Results feed the existing partial/full overlay rendering + state machine
+  (already wired; only `translate_engine` gets a real body).
+
+### 12.6 Bergamot build (route A)
+
+- Third-party source as git submodule at `third_party/bergamot-translator`
+  (pinned rev) plus our thin C shim (C ABI: init/open/translate/close).
+- `cargo xtask build-translate` drives cmake (same MSVC path locally and on CI,
+  never duplicated in YAML); Rust side hand-written `extern "C"` + static link.
+- Spike first: build on local Windows + translate one sentence. If upstream
+  Windows support is broken, fall back to translateLocally's fork layout
+  (same cmake+MSVC, proven Windows releases; their recipe: prebuilt static MKL
+  zip via `MKLROOT`, vcpkg `protobuf/pcre2` only — no Qt, since we only need the
+  translator core — `USE_STATIC_LIBS=ON`, `BUILD_ARCH=x86-64` baseline;
+  their cmake fixes are MIT, reuse with attribution).
+- Built libs never enter git; CI caches the cmake build dir.
+- Built libs never enter git; CI caches the cmake build dir.
+
+### 12.7 Packaging & compliance
+
+- Six release zips: binary, binary+small, binary+medium, small, medium,
+  translate-models (enzh+zhen in v1). Single version source `Cargo.toml`,
+  `v*` tags trigger; names carry version+platform, plus `SHA256SUMS`.
+- CI only calls xtask (`build-translate` → `dist --release-only --tier all`);
+  translation models are fetched from the registry inside CI for the 6th zip.
+  CI runs `windows-latest` only (Linux building Win32/MSVC/ORT/DirectML is pain).
+- v1 6th zip ships enzh+zhen only (decided: ja/ko etc. ride the runtime
+  on-demand download; pipeline and testing are language-agnostic, bundling more
+  is just bandwidth — add on real demand).
+- Compliance: new `THIRD-PARTY-NOTICES` (models mozilla/firefox-translations-models,
+  lib browsermt/bergamot-translator, full MPL-2.0 link, EU grant attribution)
+  in repo + every zip; same attribution in About.
+- Unsigned exe: release notes warn about SmartScreen for now.
+
+### 12.8 Language dropdowns (escape hatch, decided)
+
+- The overlay translate row becomes `[source dropdown][target dropdown][Translate]`:
+  source defaults to `Auto (detected: xx)`, target to the system locale; both are
+  standard Win32 COMBOBOX children (`CBS_DROPDOWNLIST`, native look + keyboard),
+  options = union of registry-available directions.
+- Changing either re-runs the §12.3 resolve (translate if local, else
+  download/unsupported toast); manual choice wins over auto-detect for this
+  overlay session (config file untouched).
+
+### 12.9 Build sequence
+
+1. Spike: local Windows build + one translated sentence (locks the fallback).
+2. Submodule + C shim + Rust FFI + `xtask build-translate` (same path for CI).
+3. `models.lock` translation entries + dev fetch + runtime WinHTTP downloader (cancel included).
+4. Language detect + target resolution + pair resolve.
+5. Download progress UI + cancel button.
+6. Worker-thread translation + state-machine activation + language dropdown UI (rendering ready).
+7. THIRD-PARTY-NOTICES + About + docs.
+8. CI YAML: tag releases, 6 zips + SHA256SUMS.
