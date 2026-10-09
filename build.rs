@@ -42,6 +42,61 @@ fn main() {
     deploy_dll(&dll, &root.join("target").join(&profile).join("deps"));
 
     // MKL is statically INSIDE the DLL; nothing leaks to the exe dir.
+    emit_translate_manifest(&root);
+}
+
+/// Read tools/models.lock.json translate.pinned and emit a Rust manifest so
+/// the runtime downloader never duplicates the file list.
+fn emit_translate_manifest(root: &Path) {
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let dest = out_dir.join("translate_manifest.rs");
+    let lock_path = root.join("tools/models.lock.json");
+    let lock_text = match std::fs::read_to_string(&lock_path) {
+        Ok(t) => t.trim_start_matches('\u{feff}').to_string(),
+        Err(_) => return,
+    };
+    let lock: serde_json::Value = match serde_json::from_str(&lock_text) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let empty = serde_json::Map::new();
+    let pinned = lock
+        .pointer("/translate/pinned")
+        .and_then(|v| v.as_object())
+        .unwrap_or(&empty);
+    let registry = lock
+        .pointer("/translate/registry")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let mut code = String::from(
+        "/// Generated from tools/models.lock.json translate.pinned (do not edit).\n\
+         pub struct TranslateFile { pub key: &'static str, pub path: &'static str, pub size: u64, pub sha256: &'static str }\n\
+         pub struct TranslatePair { pub name: &'static str, pub direction: &'static str, pub files: &'static [TranslateFile] }\n",
+    );
+    for (pair, spec) in pinned {
+        let direction = spec.pointer("/direction").and_then(|v| v.as_str()).unwrap_or("");
+        code.push_str(&format!(
+            "pub static PAIR_{}: TranslatePair = TranslatePair {{ name: \"{pair}\", direction: \"{direction}\", files: &[",
+            pair.to_uppercase()
+        ));
+        if let Some(files) = spec.pointer("/files").and_then(|v| v.as_object()) {
+            for (key, f) in files {
+                let p = f.pointer("/path").and_then(|v| v.as_str()).unwrap_or("");
+                let size = f.pointer("/uncompressedSize").and_then(|v| v.as_u64()).unwrap_or(0);
+                let sha = f.pointer("/uncompressedHash").and_then(|v| v.as_str()).unwrap_or("");
+                code.push_str(&format!(
+                    "TranslateFile {{ key: \"{key}\", path: \"{p}\", size: {size}, sha256: \"{sha}\" }},"
+                ));
+            }
+        }
+        code.push_str("] };\n");
+    }
+    code.push_str(&format!(
+        "pub static TRANSLATE_REGISTRY: &str = \"{registry}\";\n\
+         pub static TRANSLATE_PAIRS: &[&str] = &[{}];\n",
+        pinned.keys().map(|k| format!("\"{k}\"")).collect::<Vec<_>>().join(",")
+    ));
+    let _ = std::fs::write(&dest, code);
 }
 
 /// Copy src -> dst dir if missing or size differs. Never fails the build.
