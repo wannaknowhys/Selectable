@@ -221,6 +221,14 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   zip via `MKLROOT`, vcpkg `protobuf/pcre2` only — no Qt, since we only need the
   translator core — `USE_STATIC_LIBS=ON`, `BUILD_ARCH=x86-64` baseline;
   their cmake fixes are MIT, reuse with attribution).
+- **Spike result (verified)**: upstream pin `9271618` builds first try, no fallback
+  needed. Notes: MKL via explicit `-DMKL_*_LIBRARY` paths (no `MKLROOT` env, no
+  vcpkg; static trio baked into the binary, zero new files next to the exe);
+  `CL=/utf-8 /DPCRE2_STATIC` through the compiler env; internal PCRE2
+  (`SSPLIT_USE_INTERNAL_PCRE2=ON`) needs a one-line cmake-minimum patch (carried
+  like upstream's own `patches/`); skip `app/` (install-name issue), we link
+  libs only; single-vocab models list the vocab twice; `BUILD_ARCH=x86-64`.
+  Both directions translate with excellent quality.
 - Built libs never enter git; CI caches the cmake build dir.
 - Built libs never enter git; CI caches the cmake build dir.
 

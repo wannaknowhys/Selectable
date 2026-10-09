@@ -220,6 +220,13 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
     （该仓 MIT，比 MPL 还松）。
 - 先做 spike：本机 Windows 编过 + 翻一句中英。若上游主分支 Windows 撑不住，
   fallback 改 translateLocally 的 fork 布局（同样 cmake+MSVC，有 Windows 发行版先例），
+- **spike 结论（已验证）**：上游 pin `9271618` 一次编过，无需 fallback。
+  要点：MKL 用 `-DMKL_*_LIBRARY` 显式路径（不用 `MKLROOT` 环境，不用 vcpkg，
+  静态三件套进二进制，exe 目录零新增）；`CL=/utf-8 /DPCRE2_STATIC` 走编译器环境变量；
+  pcre2 内部版（`SSPLIT_USE_INTERNAL_PCRE2=ON`）有一个 cmake 最低版本问题，
+  打一行 patch 解决（仿照上游 `patches/` 目录）；`app/` CLI 不编（缺省 install 名问题），
+  我们只链库；单 vocab 模型 config 里 vocab 写两遍；`BUILD_ARCH=x86-64`。
+  中英互翻质量确认可用。
 - 构建产物（静态库）不进 git；CI 缓存 cmake 构建目录加速。
 
 ### 12.7 打包与合规
