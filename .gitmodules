@@ -1,0 +1,3 @@
+[submodule "third_party/bergamot-translator"]
+	path = third_party/bergamot-translator
+	url = https://github.com/browsermt/bergamot-translator.git

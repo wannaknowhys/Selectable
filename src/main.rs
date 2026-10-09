@@ -10,6 +10,7 @@ mod monitors;
 mod ocr;
 mod overlay;
 mod tray;
+mod translate;
 mod worker;
 
 use anyhow::Result;

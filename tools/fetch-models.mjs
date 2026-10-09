@@ -7,6 +7,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import https from 'node:https';
+import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,6 +81,14 @@ async function fetchTier(lock, tier) {
 async function main() {
   const args = process.argv.slice(2);
   const lock = readLock();
+  if (args.includes('--translate')) {
+    // --translate [pair...]: default enzh+zhen from the pinned lock entries.
+    const i = args.indexOf('--translate');
+    const rest = args.slice(i + 1).filter((a) => !a.startsWith('--'));
+    const pairs = rest.length > 0 ? rest : Object.keys(lock.translate.pinned);
+    for (const p of pairs) await fetchTranslatePair(lock, p);
+    return;
+  }
   let tiers = [];
   if (args.includes('--all')) tiers = Object.keys(lock.tiers);
   else {
@@ -87,6 +97,86 @@ async function main() {
     tiers = [args[i + 1]];
   }
   for (const t of tiers) await fetchTier(lock, t);
+}
+
+function getBuffer(url) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'selectable-fetch/0.1' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        getBuffer(new URL(res.headers.location, url).href).then(resolve, reject);
+        return;
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+        return;
+      }
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+    req.on('error', reject);
+  });
+}
+
+// Translation pair fetch: pinned registry files -> models/translate/{pair}/
+// plus a bergamot config.yml (single-vocab models list it twice).
+async function fetchTranslatePair(lock, pair) {
+  const spec = lock.translate.pinned[pair];
+  if (!spec) throw new Error(`unknown translate pair: ${pair}`);
+  const base = 'https://storage.googleapis.com/moz-fx-translations-data--303e-prod-translations-data';
+  const dir = path.join(ROOT, 'models', 'translate', pair);
+  fs.mkdirSync(dir, { recursive: true });
+  const names = {};
+  for (const [key, f] of Object.entries(spec.files)) {
+    const base_name = path.basename(f.path).replace(/\.gz$/, '');
+    const dest = path.join(dir, base_name);
+    names[key] = base_name;
+    if (fs.existsSync(dest)) {
+      console.log(`  ${pair}/${base_name} already present, skipping`);
+      continue;
+    }
+    console.log(`  downloading ${pair}/${base_name}`);
+    const data = await getBuffer(`${base}/${f.path}`);
+    const raw = f.path.endsWith('.gz') ? zlib.gunzipSync(data) : data;
+    if (f.uncompressedSize && raw.length !== f.uncompressedSize) {
+      throw new Error(`size mismatch for ${pair}/${base_name}: ${raw.length} != ${f.uncompressedSize}`);
+    }
+    if (f.uncompressedHash) {
+      const hash = crypto.createHash('sha256').update(raw).digest('hex');
+      if (hash !== f.uncompressedHash) throw new Error(`sha256 mismatch for ${pair}/${base_name}`);
+    }
+    fs.writeFileSync(dest, raw);
+  }
+  const vocabs = names.vocab
+    ? [`    - ${names.vocab}`, `    - ${names.vocab}`]
+    : [`    - ${names.srcVocab}`, `    - ${names.trgVocab}`];
+  const cfg = [
+    'relative-paths: true',
+    'models:',
+    `  - ${names.model}`,
+    'vocabs:',
+    ...vocabs,
+    'shortlist:',
+    `  - ${names.lexicalShortlist}`,
+    '  - false',
+    'beam-size: 1',
+    'normalize: 1.0',
+    'word-penalty: 0',
+    'max-length-break: 128',
+    'mini-batch-words: 1024',
+    'workspace: 128',
+    'max-length-factor: 2.0',
+    'skip-cost: true',
+    'cpu-threads: 4',
+    'quiet: true',
+    'quiet-translation: true',
+    'gemm-precision: int8shiftAlphaAll',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(dir, 'config.yml'), cfg);
+  console.log(`translate ${pair} complete -> ${dir}`);
 }
 
 main().catch((e) => { console.error('fetch failed:', e.message); process.exit(1); });

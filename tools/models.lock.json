@@ -18,6 +18,29 @@
   "translate": {
     "note": "Phase 2. Resolved at fetch time via the Mozilla model registry (latest releaseStatus kept).",
     "registry": "https://storage.googleapis.com/moz-fx-translations-data--303e-prod-translations-data/db/models.json",
-    "pairs": ["enzh", "zhen"]
+    "pairs": ["enzh", "zhen"],
+    "pinned": {
+      "enzh": {
+        "direction": "en-zh",
+        "candidate": 1,
+        "architecture": "base-memory",
+        "files": {
+          "model": { "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/model.enzh.intgemm.alphas.bin.gz", "uncompressedSize": 43849787, "uncompressedHash": "4e5accc141373565ddc8fa1565bceaa8d0c3482a82cab8131c719ebcc6c2157c" },
+          "srcVocab": { "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/srcvocab.enzh.spm.gz" },
+          "trgVocab": { "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/trgvocab.enzh.spm.gz" },
+          "lexicalShortlist": { "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/lex.50.50.enzh.s2t.bin.gz" }
+        }
+      },
+      "zhen": {
+        "direction": "zh-en",
+        "candidate": 0,
+        "architecture": "base",
+        "files": {
+          "model": { "path": "models/zh-en/cjk_icu_base_LQeOIbF7Sbq3XA8lsRPotw/exported/model.zhen.intgemm.alphas.bin.gz", "uncompressedSize": 59504955, "uncompressedHash": "3535442962ec8f4a553cc19b206befcac689ee9cddaea44fa91e21527fc30ac2" },
+          "vocab": { "path": "models/zh-en/cjk_icu_base_LQeOIbF7Sbq3XA8lsRPotw/exported/vocab.zhen.spm.gz" },
+          "lexicalShortlist": { "path": "models/zh-en/cjk_icu_base_LQeOIbF7Sbq3XA8lsRPotw/exported/lex.50.50.zhen.s2t.bin.gz" }
+        }
+      }
+    }
   }
 }

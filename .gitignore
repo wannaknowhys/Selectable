@@ -17,3 +17,5 @@ temp/
 
 # Portable distribution assembled by `cargo xtask dist` (never committed)
 dist/
+# Native translation build tree (MKL/vcpkg/cmake outputs, never committed)
+build-native/

@@ -56,10 +56,21 @@ fn triple_complete(dir: &Path) -> bool {
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(|s| s.as_str()) != Some("dist") {
-        eprintln!("usage: cargo xtask dist [--debug-only] [--release-only] [--tier small|medium|all]");
-        std::process::exit(2);
+    match args.get(1).map(|s| s.as_str()) {
+        Some("dist") => cmd_dist(&args),
+        Some("build-translate") => translate::build_translate(),
+        _ => {
+            eprintln!("usage:");
+            eprintln!("  cargo xtask dist [--debug-only] [--release-only] [--tier small|medium|all]");
+            eprintln!("  cargo xtask build-translate");
+            std::process::exit(2);
+        }
     }
+}
+
+mod translate;
+
+fn cmd_dist(args: &[String]) -> anyhow::Result<()> {
     let debug_only = args.iter().any(|a| a == "--debug-only");
     let release_only = args.iter().any(|a| a == "--release-only");
     let tier = args.iter().position(|a| a == "--tier").and_then(|i| args.get(i + 1)).cloned();
