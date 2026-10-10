@@ -120,10 +120,10 @@ function getBuffer(url) {
   });
 }
 
-// Translation pair fetch: pinned registry files -> models/translate/{pair}/
+// Translation pair fetch: pinned + pivot registry files -> models/translate/{pair}/
 // plus a bergamot config.yml (single-vocab models list it twice).
 async function fetchTranslatePair(lock, pair) {
-  const spec = lock.translate.pinned[pair];
+  const spec = lock.translate.pinned[pair] || (lock.translate.pivot || {})[pair];
   if (!spec) throw new Error(`unknown translate pair: ${pair}`);
   const base = 'https://storage.googleapis.com/moz-fx-translations-data--303e-prod-translations-data';
   const dir = path.join(ROOT, 'models', 'translate', pair);

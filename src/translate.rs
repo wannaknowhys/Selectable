@@ -106,6 +106,84 @@ include!(concat!(env!("OUT_DIR"), "/translate_manifest.rs"));
 
 use std::path::Path;
 
+/// Translation plan for src->tgt over the baked registry snapshot
+/// (TRANSLATE_KNOWN_PAIRS) and the baked file tables (pair_files).
+/// v1 pivots only via en: ja->zh runs ja->en then en->zh on the same worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Plan {
+    /// src == tgt: nothing to translate.
+    Same,
+    /// Ordered engine legs, back-to-back (1 direct, 2 via pivot).
+    Legs(Vec<String>),
+    /// No direct leg and no pivot (caller falls back to external).
+    Unsupported,
+}
+
+pub fn plan_for(src: &str, tgt: &str) -> Plan {
+    // None when identical (nothing to translate), case-insensitive.
+    if crate::lang::pair_for(src, tgt).is_none() {
+        return Plan::Same;
+    }
+    let (s, t) = (src.to_lowercase(), tgt.to_lowercase());
+    let direct = format!("{s}{t}");
+    if TRANSLATE_KNOWN_PAIRS.contains(&direct.as_str()) && pair_files(&direct).is_some() {
+        return Plan::Legs(vec![direct]);
+    }
+    if s != "en" && t != "en" {
+        let (a, b) = (format!("{s}en"), format!("en{t}"));
+        if TRANSLATE_KNOWN_PAIRS.contains(&a.as_str())
+            && TRANSLATE_KNOWN_PAIRS.contains(&b.as_str())
+            && pair_files(&a).is_some()
+            && pair_files(&b).is_some()
+        {
+            return Plan::Legs(vec![a, b]);
+        }
+    }
+    Plan::Unsupported
+}
+
+/// All legs present on disk?
+pub fn chain_complete(models_dir: &Path, legs: &[String]) -> bool {
+    legs.iter().all(|p| pair_complete(models_dir, p))
+}
+
+/// Summed baked model bytes over the legs (confirm-box MB figure).
+pub fn chain_total_bytes(legs: &[String]) -> u64 {
+    legs.iter()
+        .filter_map(|p| pair_files(p))
+        .flat_map(|fs| fs.iter().map(|f| f.size))
+        .sum()
+}
+
+/// Download every leg in order into models/translate/{leg}/ + config.yml.
+/// Progress is global across legs: (file_idx, total_files, done, total?),
+/// so the single download panel just works for 1- and 2-leg plans.
+pub fn download_chain_blocking(
+    models_dir: &std::path::Path,
+    legs: &[String],
+    prog: &std::sync::Arc<std::sync::Mutex<(usize, usize, u64, Option<u64>)>>,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> anyhow::Result<()> {
+    if legs.len() == 1 {
+        return download_pair_blocking(models_dir, &legs[0], prog, cancel);
+    }
+    let total: usize = legs
+        .iter()
+        .filter_map(|p| pair_files(p))
+        .map(|fs| fs.len())
+        .sum();
+    let mut base = 0usize;
+    for leg in legs {
+        let files = pair_files(leg).ok_or_else(|| anyhow::anyhow!("unknown pair {leg}"))?;
+        download_pair_files(models_dir, leg, files, base, total, prog, cancel)?;
+        base += files.len();
+    }
+    if let Ok(mut p) = prog.lock() {
+        *p = (total, total, 0, None);
+    }
+    Ok(())
+}
+
 /// Download + unpack one pair into models/translate/{pair}/ + config.yml.
 /// Progress shared as (file_idx, n_files, done_bytes, total_bytes?).
 /// Same layout/semantics as tools/fetch-models.mjs --translate (single source:
@@ -116,8 +194,26 @@ pub fn download_pair_blocking(
     prog: &std::sync::Arc<std::sync::Mutex<(usize, usize, u64, Option<u64>)>>,
     cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<()> {
-    use std::io::Read as _;
     let files = pair_files(pair).ok_or_else(|| anyhow::anyhow!("unknown pair {pair}"))?;
+    let total = files.len();
+    download_pair_files(models_dir, pair, files, 0, total, prog, cancel)?;
+    // Mark complete.
+    if let Ok(mut p) = prog.lock() {
+        *p = (total, total, 0, None);
+    }
+    Ok(())
+}
+
+fn download_pair_files(
+    models_dir: &std::path::Path,
+    pair: &str,
+    files: &[TranslateFile],
+    base_idx: usize,
+    total_files: usize,
+    prog: &std::sync::Arc<std::sync::Mutex<(usize, usize, u64, Option<u64>)>>,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> anyhow::Result<()> {
+    use std::io::Read as _;
     let dir = models_dir.join(pair);
     std::fs::create_dir_all(&dir)?;
     let mut names: std::collections::HashMap<&str, String> = Default::default();
@@ -144,7 +240,7 @@ pub fn download_pair_blocking(
                 let prog = prog.clone();
                 move |done, total| {
                     if let Ok(mut p) = prog.lock() {
-                        *p = (i, files.len(), done, total);
+                        *p = (base_idx + i, total_files, done, total);
                     }
                 }
             },
@@ -178,10 +274,6 @@ pub fn download_pair_blocking(
         _ => vec![],
     };
     write_pair_config(models_dir, pair, &vocabs, &get("model"), &get("lexicalShortlist"));
-    // Mark complete.
-    if let Ok(mut p) = prog.lock() {
-        *p = (files.len(), files.len(), 0, None);
-    }
     Ok(())
 }
 
@@ -222,6 +314,21 @@ pub fn write_pair_config(models_dir: &Path, pair: &str, vocabs: &[String], model
     let _ = std::fs::write(dir.join("config.yml"), cfg);
 }
 
+/// Target side of a compact leg code ("zhen" -> "en", "enzh_hant" -> "zh_hant").
+fn leg_target_is_cjk(leg: &str) -> bool {
+    leg_target(leg).starts_with("zh")
+}
+
+fn leg_target(leg: &str) -> &str {
+    if leg.ends_with("zh_hant") {
+        "zh_hant"
+    } else if leg.len() >= 2 {
+        &leg[leg.len() - 2..]
+    } else {
+        ""
+    }
+}
+
 /// Split text into translatable sentences: CJK breaks on 。！？!?…\n,
 /// Latin on .!? plus newlines. Keeps delimiters attached.
 pub fn split_sentences(text: &str) -> Vec<String> {
@@ -258,7 +365,7 @@ pub fn split_sentences(text: &str) -> Vec<String> {
 /// Resident translation worker: owns the Engine (Send-confined) and lazily
 /// loads pair models from the models dir. Mirrors OcrWorker's protocol.
 pub struct TranslateJob {
-    pub pair: String,
+    pub chain: Vec<String>,
     pub texts: Vec<String>,
 }
 
@@ -294,47 +401,71 @@ impl TranslateWorker {
                 };
                 let mut loaded = std::collections::HashSet::new();
                 for job in job_rx {
-                    if !loaded.contains(&job.pair) {
-                        if let Err(e) = engine.load(&models_dir, &job.pair) {
-                            let _ = rep_tx.send(TranslateReply {
-                                texts: Vec::new(),
-                                error: Some(format!("{e:#}")),
-                            });
-                            continue;
+                    if job.chain.is_empty() {
+                        let _ = rep_tx.send(TranslateReply {
+                            texts: Vec::new(),
+                            error: Some("empty translation chain".to_string()),
+                        });
+                        continue;
+                    }
+                    let mut ok = true;
+                    for leg in &job.chain {
+                        if !loaded.contains(leg) {
+                            if let Err(e) = engine.load(&models_dir, leg) {
+                                let _ = rep_tx.send(TranslateReply {
+                                    texts: Vec::new(),
+                                    error: Some(format!("{e:#}")),
+                                });
+                                ok = false;
+                                break;
+                            }
+                            loaded.insert(leg.clone());
                         }
-                        loaded.insert(job.pair.clone());
+                    }
+                    if !ok {
+                        continue;
                     }
                     // Sentence-split for stability, then rejoin per line so the
-                    // reply keeps 1:1 line mapping with the job. CJK targets
-                    // join without spaces, others with a single space.
-                    let joiner = if job.pair.ends_with("zh") { "" } else { " " };
-                    let mut out = Vec::with_capacity(job.texts.len());
+                    // reply keeps 1:1 line mapping with the job. Each leg
+                    // joins in its own target style (CJK targets without
+                    // spaces); pivot legs run back-to-back: texts -> mid ->
+                    // final. Re-splitting per leg keeps the chain robust to
+                    // either join style.
+                    let mut cur = job.texts.clone();
                     let mut err: Option<String> = None;
-                    for t in &job.texts {
-                        let mut parts = Vec::new();
-                        for s in split_sentences(t) {
-                            match engine.translate(&job.pair, &s) {
-                                Ok(tr) => parts.push(tr),
-                                Err(e) => {
-                                    err = Some(format!("{e:#}"));
-                                    break;
+                    for leg in &job.chain {
+                        let joiner = if leg_target_is_cjk(leg) { "" } else { " " };
+                        let mut out = Vec::with_capacity(cur.len());
+                        for t in &cur {
+                            let mut parts = Vec::new();
+                            for s in split_sentences(t) {
+                                match engine.translate(leg, &s) {
+                                    Ok(tr) => parts.push(tr),
+                                    Err(e) => {
+                                        err = Some(format!("{e:#}"));
+                                        break;
+                                    }
                                 }
                             }
+                            if err.is_some() {
+                                break;
+                            }
+                            out.push(parts.join(joiner));
                         }
                         if err.is_some() {
                             break;
                         }
-                        out.push(parts.join(joiner));
+                        cur = out;
                     }
-                    let _ = rep_tx.send(TranslateReply { texts: out, error: err });
+                    let _ = rep_tx.send(TranslateReply { texts: cur, error: err });
                 }
             })
             .expect("spawn translate worker");
         Self { tx: job_tx, rx: rep_rx }
     }
 
-    pub fn submit(&self, pair: String, texts: Vec<String>) {
-        let _ = self.tx.send(TranslateJob { pair, texts });
+    pub fn submit(&self, chain: Vec<String>, texts: Vec<String>) {
+        let _ = self.tx.send(TranslateJob { chain, texts });
     }
 }
 
@@ -365,6 +496,42 @@ mod tests {
         assert!(split_sentences("   ").is_empty());
     }
 
+    #[test]
+    fn chain_planning() {
+        // Direct legs (baked file tables).
+        assert_eq!(plan_for("en", "zh"), Plan::Legs(vec!["enzh".to_string()]));
+        assert_eq!(plan_for("zh", "en"), Plan::Legs(vec!["zhen".to_string()]));
+        assert_eq!(plan_for("ja", "en"), Plan::Legs(vec!["jaen".to_string()]));
+        // Pivot via en (no direct jazh/frzh in the registry).
+        assert_eq!(
+            plan_for("ja", "zh"),
+            Plan::Legs(vec!["jaen".to_string(), "enzh".to_string()])
+        );
+        assert_eq!(
+            plan_for("fr", "zh"),
+            Plan::Legs(vec!["fren".to_string(), "enzh".to_string()])
+        );
+        assert_eq!(
+            plan_for("zh", "ja"),
+            Plan::Legs(vec!["zhen".to_string(), "enja".to_string()])
+        );
+        // Same language: nothing to do.
+        assert_eq!(plan_for("en", "EN"), Plan::Same);
+        assert_eq!(plan_for("zh", "zh"), Plan::Same);
+        // Known registry pair but no baked files (e.g. en-ca): external fallback.
+        assert_eq!(plan_for("en", "ca"), Plan::Unsupported);
+        // Pivot leg missing files on one side: unsupported, not half-chain.
+        assert_eq!(plan_for("ca", "zh"), Plan::Unsupported);
+        // leg target styles drive the joiner.
+        assert!(leg_target_is_cjk("enzh"));
+        assert!(leg_target_is_cjk("enzh_hant"));
+        assert!(!leg_target_is_cjk("zhen"));
+        assert!(!leg_target_is_cjk("jaen"));
+        // Baked chain sizes are nonzero (confirm-box MB figure).
+        assert!(chain_total_bytes(&["jaen".to_string(), "enzh".to_string()]) > 0);
+        assert!(chain_total_bytes(&["enzh".to_string()]) > 0);
+    }
+
     // One test owns engines sequentially: the native side allows a single
     // live service per process, so direct + worker roundtrips must not run
     // on parallel test threads.
@@ -386,9 +553,9 @@ mod tests {
         assert!(en.split_whitespace().count() >= 2, "empty translation");
         drop(engine);
         // Worker path: sentence-split + rejoin keeps 1:1 line mapping.
-        let w = TranslateWorker::spawn(root);
+        let w = TranslateWorker::spawn(root.clone());
         w.submit(
-            "enzh".to_string(),
+            vec!["enzh".to_string()],
             vec!["Hello, world! Good morning.".to_string()],
         );
         let rep = w
@@ -399,5 +566,23 @@ mod tests {
         assert_eq!(rep.texts.len(), 1, "line mapping must stay 1:1");
         eprintln!("worker en->zh: {}", rep.texts[0]);
         assert!(rep.texts[0].chars().count() >= 2, "empty translation");
+        // Pivot path on the same worker (single engine): fr->en->zh when the
+        // fren leg is fetched; skipped otherwise (fetch fren to cover it).
+        if root.join("fren/config.yml").is_file() {
+            w.submit(
+                vec!["fren".to_string(), "enzh".to_string()],
+                vec!["Bonjour le monde.".to_string()],
+            );
+            let rep = w
+                .rx
+                .recv_timeout(std::time::Duration::from_secs(180))
+                .expect("worker pivot reply");
+            assert!(rep.error.is_none(), "pivot error: {:?}", rep.error);
+            assert_eq!(rep.texts.len(), 1, "line mapping must stay 1:1");
+            eprintln!("worker fr->en->zh: {}", rep.texts[0]);
+            assert!(rep.texts[0].chars().count() >= 2, "empty pivot translation");
+        } else {
+            eprintln!("skip: no fren models (fetch fren for pivot coverage)");
+        }
     }
 }

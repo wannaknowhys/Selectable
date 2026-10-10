@@ -20,7 +20,8 @@ use windows::{
             DrawTextW, EndPaint, FillRect, FillRgn, GetDC, GetStockObject, SelectClipRgn, SelectObject,
             SetBkMode, SetTextColor, StretchDIBits, AC_SRC_OVER, BACKGROUND_MODE, BITMAPINFO, BITMAPINFOHEADER,
             BI_RGB, BLENDFUNCTION, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
-            DEFAULT_QUALITY, DIB_RGB_COLORS, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER,
+            DEFAULT_QUALITY,             DIB_RGB_COLORS, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP, DT_VCENTER,
+            DT_WORDBREAK,
             FW_NORMAL, HBITMAP, HDC, HFONT, HGDIOBJ, HOLLOW_BRUSH, InvalidateRect, OUT_DEFAULT_PRECIS,
             PAINTSTRUCT, PS_DOT, PS_SOLID, Rectangle,
             SRCCOPY, TRANSPARENT,
@@ -45,8 +46,8 @@ use windows::{
                 PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
                 SetWindowLongPtrW, SetWindowTextW, TrackPopupMenu, TranslateMessage,
                 CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBN_SELCHANGE,
-                CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
-                MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING, MSG, SM_CXVIRTUALSCREEN,
+                CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDYES,
+                MB_ICONQUESTION, MB_YESNO, MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING, MSG, MessageBoxW, SM_CXVIRTUALSCREEN,
                 SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWNORMAL,
                 TPM_RETURNCMD, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
                 WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
@@ -58,6 +59,7 @@ use windows::{
 };
 
 use crate::{
+    blocks::cluster_blocks,
     clipboard,
     lang,
     monitors::{enum_monitors, focus_monitor, Mon},
@@ -108,21 +110,34 @@ enum TMode {
 }
 
 #[derive(Debug, Clone)]
-struct Translated {
-    texts: Vec<String>, // per line; empty = untranslated
+struct TransRegion {
+    rect: (i32, i32, i32, i32),
+    font_px: u32,
+    text: String,
 }
 
-/// Awaiting translation: line indices + texts + mode + pair.
+#[derive(Debug, Clone)]
+struct Translated {
+    regions: Vec<TransRegion>, // translated text per region; empty = untranslated
+}
+
+/// Awaiting translation: regions (rect + joined text) + mode + pair.
+/// Partial = one region over the selection bounds; Full = one per macro-block.
+struct RegionJob {
+    rect: (i32, i32, i32, i32),
+    font_px: u32,
+    text: String,
+}
+
 struct PendingT {
-    idx: Vec<usize>,
-    texts: Vec<String>,
+    regions: Vec<RegionJob>,
     mode: TMode,
-    pair: String,
+    chain: Vec<String>,
 }
 
 /// In-flight translation-model download (progress UI + cancel live here).
 struct DlState {
-    pair: String,
+    label: String,
     prog: std::sync::Arc<std::sync::Mutex<(usize, usize, u64, Option<u64>)>>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     done_rx: std::sync::mpsc::Receiver<Result<(), String>>,
@@ -455,16 +470,11 @@ fn layout_buttons(st: &mut State) {
     place_combos(st);
 }
 
-/// Two-letter codes appearing in any known pair, sorted.
+/// Two-letter codes appearing in any known registry pair, sorted.
+/// Baked at build time from the full pair snapshot (offline-safe), so third
+/// languages show up in the dropdowns even before any model is downloaded.
 fn pair_langs() -> Vec<String> {
-    let mut langs = std::collections::BTreeSet::new();
-    for p in translate::TRANSLATE_PAIRS {
-        if p.len() == 4 {
-            langs.insert(p[..2].to_string());
-            langs.insert(p[2..].to_string());
-        }
-    }
-    langs.into_iter().collect()
+    translate::TRANSLATE_LANGS.iter().map(|s| s.to_string()).collect()
 }
 
 fn combo_add(hwnd: HWND, items: &[String]) {
@@ -662,6 +672,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_RBUTTONUP => {
             let p = (loword(lp.0) as i32, hiword(lp.0) as i32);
             dlog(format!("rbutton {p:?}"));
+            autoselect_at(st, p);
             popup_menu(st);
             LRESULT(0)
         }
@@ -674,6 +685,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if in_rect(p, st.btn_save) {
                 do_save_as(st);
             } else {
+                autoselect_at(st, p);
                 popup_menu(st);
             }
             LRESULT(0)
@@ -785,7 +797,7 @@ fn on_tick(st: &mut State, id: usize) {
             let dl = st.dl.take().unwrap();
             match r {
                 Ok(()) => {
-                    show_toast(st, format!("模型 {} 下载完成，翻译中…", dl.pair));
+                    show_toast(st, format!("模型 {} 下载完成，翻译中…", dl.label));
                     if let Some(pending) = st.pending.take() {
                         submit_translate(st, pending);
                     }
@@ -817,14 +829,19 @@ fn on_tick(st: &mut State, id: usize) {
                     show_toast(st, format!("翻译失败，已转外部：{e}"));
                     open_url(&fill_url(&st.translate_url, &selected_or_all(st)));
                 } else if let Some(pending) = st.pending.take() {
-                    let mut texts = vec![String::new(); st.lines.len()];
-                    for (li, t) in pending.idx.iter().zip(rep.texts.iter()) {
-                        if *li < texts.len() {
-                            texts[*li] = t.clone();
-                        }
-                    }
+                    // Worker Vec order matches the submitted regions (R4).
+                    let regions = pending
+                        .regions
+                        .iter()
+                        .zip(rep.texts.iter())
+                        .map(|(r, t)| TransRegion {
+                            rect: r.rect,
+                            font_px: r.font_px,
+                            text: t.clone(),
+                        })
+                        .collect();
                     let mode = pending.mode;
-                    st.translated = Some(Translated { texts });
+                    st.translated = Some(Translated { regions });
                     st.tmode = match mode {
                         TMode::Partial => TMode::Partial,
                         _ => TMode::Full,
@@ -975,47 +992,68 @@ fn translate_models_dir() -> std::path::PathBuf {
     crate::ocr::models_root().join("translate")
 }
 
-/// Resolve (src, pair) for `text`; Err is user-facing toast text.
-fn resolve_pair(st: &State, text: &str) -> Result<(String, String), String> {
-    let src = match &st.src_sel {
-        SrcSel::Lang(l) => l.clone(),
-        SrcSel::Auto => {
-            if st.src_cfg.trim().is_empty() || st.src_cfg.eq_ignore_ascii_case("auto") {
-                lang::detect_script(text).to_string()
-            } else {
-                st.src_cfg.to_lowercase()
-            }
-        }
-    };
+/// Resolve (src, tgt, plan) for `text`; Err is user-facing toast text.
+/// Auto source excludes the target so mixed text picks the other side (R3).
+/// Same -> "无需翻译"; no direct leg and no via-en pivot -> external fallback.
+fn resolve_plan(st: &State, text: &str) -> Result<(String, String, Vec<String>), String> {
     let tgt = if st.tgt.trim().is_empty() {
         lang::resolve_target(Some(&st.tgt_cfg))
     } else {
         st.tgt.clone()
     };
-    lang::pair_for(&src, &tgt)
-        .map(|p| (src, p))
-        .ok_or_else(|| "无需翻译".to_string())
+    let src = match &st.src_sel {
+        SrcSel::Lang(l) => l.clone(),
+        SrcSel::Auto => {
+            if st.src_cfg.trim().is_empty() || st.src_cfg.eq_ignore_ascii_case("auto") {
+                lang::detect_script_except(text, &tgt).to_string()
+            } else {
+                st.src_cfg.to_lowercase()
+            }
+        }
+    };
+    match translate::plan_for(&src, &tgt) {
+        translate::Plan::Legs(legs) => Ok((src, tgt, legs)),
+        translate::Plan::Same => Err("无需翻译".to_string()),
+        translate::Plan::Unsupported => Err("UNSUPPORTED".to_string()),
+    }
 }
 
-/// Per-line payload for a scope: Partial = touched non-empty lines.
-fn scope_payload(st: &State, mode: TMode) -> Vec<(usize, String)> {
-    let idx: Vec<usize> = match mode {
-        TMode::Partial => match st.sel {
-            Some(((l0, _), (l1, _))) => (l0..=l1.min(st.lines.len().saturating_sub(1))).collect(),
-            None => vec![],
-        },
-        _ => (0..st.lines.len()).collect(),
-    };
-    idx.into_iter()
-        .filter_map(|li| {
-            let t = st.lines[li].text.clone();
-            if t.trim().is_empty() {
-                None
-            } else {
-                Some((li, t))
+/// Region payload for a scope (R4): Partial = selection bounds as one region,
+/// Full = one region per macro-block (clustered + newline-restored).
+fn build_regions(st: &State, mode: TMode) -> Vec<RegionJob> {
+    match mode {
+        TMode::Partial => {
+            let Some(r) = st.sel else { return vec![] };
+            let text = range_text(st, r);
+            if text.trim().is_empty() || st.lines.is_empty() {
+                return vec![];
             }
-        })
-        .collect()
+            let n = st.lines.len();
+            let ((l0, _), (l1, _)) = r;
+            let (a, b) = (l0.min(n - 1), l1.min(n - 1));
+            let (mut x0, mut y0, mut x1, mut y1) =
+                (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+            let mut hmax = 0u32;
+            for li in a..=b {
+                let (lx0, ly0, lx1, ly1) = st.lines[li].quad.axis_aligned_bounds();
+                x0 = x0.min(lx0 as i32);
+                y0 = y0.min(ly0 as i32);
+                x1 = x1.max(lx1 as i32);
+                y1 = y1.max(ly1 as i32);
+                hmax = hmax.max(ly1.saturating_sub(ly0));
+            }
+            vec![RegionJob {
+                rect: (x0, y0, x1, y1),
+                font_px: hmax.saturating_sub(4).max(12),
+                text,
+            }]
+        }
+        _ => cluster_blocks(&st.lines)
+            .into_iter()
+            .filter(|b| !b.text.trim().is_empty())
+            .map(|b| RegionJob { rect: b.rect, font_px: b.font_px, text: b.text })
+            .collect(),
+    }
 }
 
 /// Entry: translate scope in mode. Downloads models first when missing —
@@ -1024,61 +1062,93 @@ fn start_translate(st: &mut State, mode: TMode) {
     if !st.ready || st.translating || st.dl.is_some() {
         return;
     }
-    let items = scope_payload(st, mode);
-    if items.is_empty() {
+    let regions = build_regions(st, mode);
+    if regions.is_empty() {
         show_toast(st, "先选中要翻译的文字".to_string());
         return;
     }
-    let probe = items[0].1.clone();
-    let (_src, pair) = match resolve_pair(st, &probe) {
+    // Probe the longest region (R4): a single first box misjudges mixed screens.
+    let probe = regions.iter().max_by_key(|r| r.text.len()).map(|r| r.text.clone()).unwrap_or_default();
+    let (src, tgt, legs) = match resolve_plan(st, &probe) {
         Ok(v) => v,
+        Err(e) if e == "UNSUPPORTED" => {
+            // No direct leg and no via-en pivot: external translator fallback.
+            show_toast(st, "暂不支持该语种组合，已转外部翻译".to_string());
+            open_url(&fill_url(&st.translate_url, &probe));
+            return;
+        }
         Err(e) => {
             show_toast(st, e);
             return;
         }
     };
-    if translate::pair_files(&pair).is_none() {
-        // Entirely unknown pair: keep the old external-translator behavior.
-        show_toast(st, "暂不支持该语种组合，已转外部翻译".to_string());
-        open_url(&fill_url(&st.translate_url, &probe));
-        return;
-    }
-    let pending = PendingT {
-        idx: items.iter().map(|(i, _)| *i).collect(),
-        texts: items.iter().map(|(_, t)| t.clone()).collect(),
-        mode,
-        pair: pair.clone(),
-    };
-    if !translate::pair_complete(&translate_models_dir(), &pair) {
+    let label = legs.join("+");
+    let pending = PendingT { regions, mode, chain: legs.clone() };
+    if !translate::chain_complete(&translate_models_dir(), &legs) {
+        // R5: third-language downloads ask first (legs + total MB shown);
+        // en/locale directions download directly.
+        if needs_download_confirm(&src) && !confirm_download(st.hwnd, &legs, &src, &tgt) {
+            show_toast(st, "已取消下载".to_string());
+            return;
+        }
         st.pending = Some(pending);
-        start_download(st, pair);
+        start_download(st, legs, label);
         return;
     }
     submit_translate(st, pending);
 }
 
+/// R5: confirm when the source is neither English nor the system locale.
+fn needs_download_confirm(src: &str) -> bool {
+    !(src.eq_ignore_ascii_case("en") || src.eq_ignore_ascii_case(&lang::system_lang()))
+}
+
+/// Modal YESNO on the overlay: one line per leg + total MB (a pivot confirms
+/// both segments at once, then translates twice). True = proceed to download.
+fn confirm_download(hwnd: HWND, legs: &[String], src: &str, tgt: &str) -> bool {
+    let total = translate::chain_total_bytes(legs);
+    let mb = total as f64 / 1048576.0;
+    let body = if legs.len() == 1 {
+        format!("需要下载 {src}→{tgt} 翻译模型（约 {mb:.0} MB），现在下载吗？")
+    } else {
+        // Pivot: spell out both segments (src->en->tgt) plus the summed size.
+        let mid = "en";
+        format!(
+            "需要下载 {src}→{mid} + {mid}→{tgt} 两段翻译模型（共约 {mb:.0} MB），现在下载吗？"
+        )
+    };
+    let msg: Vec<u16> = format!("{body}\0").encode_utf16().collect();
+    unsafe {
+        MessageBoxW(Some(hwnd), PCWSTR(msg.as_ptr()), w!("Selectable"), MB_YESNO | MB_ICONQUESTION) == IDYES
+    }
+}
+
 fn submit_translate(st: &mut State, pending: PendingT) {
     let models_dir = translate_models_dir();
     let worker = st.tworker.get_or_insert_with(|| TranslateWorker::spawn(models_dir));
-    worker.submit(pending.pair.clone(), pending.texts.clone());
+    worker.submit(pending.chain.clone(), pending.regions.iter().map(|r| r.text.clone()).collect());
     st.pending = Some(pending);
     st.translating = true;
     set_title(st, "Selectable — 翻译中…");
 }
 
-fn start_download(st: &mut State, pair: String) {
+fn start_download(st: &mut State, legs: Vec<String>, label: String) {
     use std::sync::{atomic::AtomicBool, Arc, Mutex};
-    let n_files = translate::pair_files(&pair).map(|f| f.len()).unwrap_or(1);
-    let prog = Arc::new(Mutex::new((0usize, n_files, 0u64, None::<u64>)));
+    let n_files: usize = legs
+        .iter()
+        .filter_map(|p| translate::pair_files(p))
+        .map(|f| f.len())
+        .sum();
+    let prog = Arc::new(Mutex::new((0usize, n_files.max(1), 0u64, None::<u64>)));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let models_dir = translate_models_dir();
-    let pair2 = pair.clone();
+    let legs2 = legs.clone();
     let (prog2, cancel2) = (prog.clone(), cancel.clone());
     std::thread::Builder::new()
         .name("translate-dl".to_string())
         .spawn(move || {
-            let r = translate::download_pair_blocking(&models_dir, &pair2, &prog2, &cancel2)
+            let r = translate::download_chain_blocking(&models_dir, &legs2, &prog2, &cancel2)
                 .map_err(|e| format!("{e:#}"));
             let _ = tx.send(r);
         })
@@ -1088,13 +1158,26 @@ fn start_download(st: &mut State, pair: String) {
     let cx = (f.l + f.r) / 2;
     let cy = (f.t + f.b) / 2;
     st.dl = Some(DlState {
-        pair,
+        label,
         prog,
         cancel,
         done_rx: rx,
         cancel_rect: (cx - 65, cy + 44, cx + 65, cy + 80),
     });
     invalidate(st);
+}
+
+/// R1: right-click with no (or empty) selection first selects the whole box
+/// under the cursor, so the menu always acts on something when possible.
+fn autoselect_at(st: &mut State, p: (i32, i32)) {
+    let has_text = st.sel.map(|r| !range_text(st, r).trim().is_empty()).unwrap_or(false);
+    if has_text {
+        return;
+    }
+    if let Some(li) = line_at_point(st, p) {
+        st.sel = Some(((li, 0), (li, 0)));
+        invalidate(st);
+    }
 }
 
 /// Context-menu "翻译选中": partial overlay of the current selection.
@@ -1258,12 +1341,13 @@ fn paint(st: &mut State) {
                 let (x0, y0, x1, y1) = l.quad.axis_aligned_bounds();
                 let _ = Rectangle(hdc, x0 as i32, y0 as i32, x1 as i32, y1 as i32);
             }
-            // Translated overlays (placeholder: none until engine lands).
+            // Selection: dark-blue strips + white chars.
+            paint_selection(hdc, st);
+            // Translated subtitles strictly above the selection (R2): they
+            // cover the blue/white strips with their own dark panels.
             if let Some(tr) = st.translated.clone() {
                 paint_translated(hdc, st, &tr);
             }
-            // Selection: dark-blue strips + white chars.
-            paint_selection(hdc, st);
             // Drag rubber band while press-dragging.
             if st.dragging {
                 if let Some((_, p0)) = st.press_at {
@@ -1296,7 +1380,9 @@ fn paint(st: &mut State) {
         let toast_data: Option<(String, u8)> = match &st.toast {
             Some(t) => {
                 let a = st.toast_level.min(8);
-                let alpha = if a >= 8 { 220 } else { a * 220 / 8 };
+                // u16 math: a=7 gives 7*220=1540, far past u8 (debug builds
+                // panic on the overflow, release builds wrap to garbage).
+                let alpha = if a >= 8 { 220 } else { (a as u16 * 220 / 8) as u8 };
                 Some((t.text.clone(), alpha))
             }
             None => None,
@@ -1378,7 +1464,7 @@ fn dl_layout(focus: &Mon) -> ((i32, i32, i32, i32), (i32, i32, i32, i32), (i32, 
 fn paint_download(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
     // Snapshot first: `font_for` needs `&mut st`, so no borrow of `st.dl`
     // may live past this line.
-    let Some((pair, prog)) = st.dl.as_ref().map(|d| (d.pair.clone(), d.prog.clone())) else { return };
+    let Some((label, prog)) = st.dl.as_ref().map(|d| (d.label.clone(), d.prog.clone())) else { return };
     let (panel, bar, cancel) = dl_layout(&st.focus);
     unsafe {
         // Panel.
@@ -1393,7 +1479,7 @@ fn paint_download(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
         SetTextColor(hdc, COLORREF(0xFFFFFF));
         SetBkMode(hdc, TRANSPARENT);
         let mut title: Vec<u16> =
-            format!("下载翻译模型 {pair}").encode_utf16().collect();
+            format!("下载翻译模型 {label}").encode_utf16().collect();
         let mut trc = RECT { left: panel.0, top: panel.1 + 10, right: panel.2, bottom: panel.1 + 36 };
         DrawTextW(hdc, &mut title, &mut trc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         // Bar background + fill.
@@ -1469,6 +1555,8 @@ fn show_toast_paint(
     }
 }
 
+/// Region subtitles (R2/R4): one dark panel per region over whatever is
+/// beneath (selection included), word-wrapped. Empty texts paint nothing.
 fn paint_translated(
     hdc: windows::Win32::Graphics::Gdi::HDC,
     st: &mut State,
@@ -1479,21 +1567,21 @@ fn paint_translated(
         let brush = CreateSolidBrush(COLORREF(0x1E3C1E));
         let old_bk = SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(0xFFFFFF));
-        let jobs: Vec<((u32, u32, u32, u32), String)> = st
-            .lines
-            .iter()
-            .zip(tr.texts.iter())
-            .filter(|(_, t)| !t.is_empty())
-            .map(|(l, t)| (l.quad.axis_aligned_bounds(), t.clone()))
-            .collect();
-        for ((x0, y0, x1, y1), t) in jobs {
-            let frc = RECT { left: x0 as i32, top: y0 as i32, right: x1 as i32, bottom: y1 as i32 };
+        for r in &tr.regions {
+            if r.text.trim().is_empty() {
+                continue;
+            }
+            let (x0, y0, x1, y1) = r.rect;
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            let frc = RECT { left: x0, top: y0, right: x1, bottom: y1 };
             FillRect(hdc, &frc, brush);
-            let font = font_for(st, (y1 - y0).saturating_sub(4).max(12));
+            let font = font_for(st, r.font_px);
             let old_font = SelectObject(hdc, font.into());
-            let mut txt: Vec<u16> = t.encode_utf16().collect();
-            let mut rc = RECT { left: x0 as i32 + 2, top: y0 as i32, right: x1 as i32, bottom: y1 as i32 };
-            DrawTextW(hdc, &mut txt, &mut rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            let mut txt: Vec<u16> = r.text.encode_utf16().collect();
+            let mut rc = RECT { left: x0 + 2, top: y0, right: x1, bottom: y1 };
+            DrawTextW(hdc, &mut txt, &mut rc, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
             SelectObject(hdc, old_font);
         }
         SetBkMode(hdc, BACKGROUND_MODE(old_bk as u32));
@@ -1858,6 +1946,20 @@ mod tests {
         assert_eq!(range_text(&st, ((0, 1), (0, 3))), "bc");
         assert_eq!(range_text(&st, ((0, 2), (1, 2))), "cd\n截屏");
         assert_eq!(range_text(&st, ((1, 0), (1, 1))), "截");
+    }
+
+    #[test]
+    fn dropdown_derives_from_full_registry_table() {
+        // Baked TRANSLATE_LANGS (not just the two default pairs): third
+        // languages must be selectable before any model is downloaded.
+        let langs = pair_langs();
+        assert!(langs.len() > 10, "got {} langs", langs.len());
+        for want in ["en", "zh", "zh_hant", "ja", "fr", "de", "ko", "ru", "es", "it", "pt"] {
+            assert!(langs.contains(&want.to_string()), "missing {want}");
+        }
+        let mut sorted = langs.clone();
+        sorted.sort();
+        assert_eq!(langs, sorted, "dropdown order must be sorted");
     }
 
     #[test]

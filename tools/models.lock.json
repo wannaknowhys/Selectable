@@ -3,32 +3,81 @@
   "hfBase": "https://huggingface.co",
   "tiers": {
     "medium": {
-      "det": { "repo": "PaddlePaddle/PP-OCRv6_medium_det_onnx", "rev": "61323801669c338b7891481ec7bac61ce31b576a", "file": "inference.onnx", "bytes": 62032837 },
-      "det_yml": { "repo": "PaddlePaddle/PP-OCRv6_medium_det_onnx", "rev": "61323801669c338b7891481ec7bac61ce31b576a", "file": "inference.yml" },
-      "rec": { "repo": "PaddlePaddle/PP-OCRv6_medium_rec_onnx", "rev": "50c7eacafc52fa7bcf4194e8cd08e46f8558504b", "file": "inference.onnx", "bytes": 76554979 },
-      "rec_yml": { "repo": "PaddlePaddle/PP-OCRv6_medium_rec_onnx", "rev": "50c7eacafc52fa7bcf4194e8cd08e46f8558504b", "file": "inference.yml" }
+      "det": {
+        "repo": "PaddlePaddle/PP-OCRv6_medium_det_onnx",
+        "rev": "61323801669c338b7891481ec7bac61ce31b576a",
+        "file": "inference.onnx",
+        "bytes": 62032837
+      },
+      "det_yml": {
+        "repo": "PaddlePaddle/PP-OCRv6_medium_det_onnx",
+        "rev": "61323801669c338b7891481ec7bac61ce31b576a",
+        "file": "inference.yml"
+      },
+      "rec": {
+        "repo": "PaddlePaddle/PP-OCRv6_medium_rec_onnx",
+        "rev": "50c7eacafc52fa7bcf4194e8cd08e46f8558504b",
+        "file": "inference.onnx",
+        "bytes": 76554979
+      },
+      "rec_yml": {
+        "repo": "PaddlePaddle/PP-OCRv6_medium_rec_onnx",
+        "rev": "50c7eacafc52fa7bcf4194e8cd08e46f8558504b",
+        "file": "inference.yml"
+      }
     },
     "small": {
-      "det": { "repo": "PaddlePaddle/PP-OCRv6_small_det_onnx", "rev": "28fe5895c24fd108c19eb3e8479f4ab385fbfc62", "file": "inference.onnx", "bytes": 9880512 },
-      "det_yml": { "repo": "PaddlePaddle/PP-OCRv6_small_det_onnx", "rev": "28fe5895c24fd108c19eb3e8479f4ab385fbfc62", "file": "inference.yml" },
-      "rec": { "repo": "PaddlePaddle/PP-OCRv6_small_rec_onnx", "rev": "b8f84f0b80c529de40b4fbb3544b84fa7233a513", "file": "inference.onnx", "bytes": 21159378 },
-      "rec_yml": { "repo": "PaddlePaddle/PP-OCRv6_small_rec_onnx", "rev": "b8f84f0b80c529de40b4fbb3544b84fa7233a513", "file": "inference.yml" }
+      "det": {
+        "repo": "PaddlePaddle/PP-OCRv6_small_det_onnx",
+        "rev": "28fe5895c24fd108c19eb3e8479f4ab385fbfc62",
+        "file": "inference.onnx",
+        "bytes": 9880512
+      },
+      "det_yml": {
+        "repo": "PaddlePaddle/PP-OCRv6_small_det_onnx",
+        "rev": "28fe5895c24fd108c19eb3e8479f4ab385fbfc62",
+        "file": "inference.yml"
+      },
+      "rec": {
+        "repo": "PaddlePaddle/PP-OCRv6_small_rec_onnx",
+        "rev": "b8f84f0b80c529de40b4fbb3544b84fa7233a513",
+        "file": "inference.onnx",
+        "bytes": 21159378
+      },
+      "rec_yml": {
+        "repo": "PaddlePaddle/PP-OCRv6_small_rec_onnx",
+        "rev": "b8f84f0b80c529de40b4fbb3544b84fa7233a513",
+        "file": "inference.yml"
+      }
     }
   },
   "translate": {
-    "note": "Phase 2. Resolved at fetch time via the Mozilla model registry (latest releaseStatus kept).",
+    "note": "pinned holds the two default pairs; pivot holds on-demand via-en legs (same schema). allPairs is the registry snapshot for chain/pivot resolution.",
     "registry": "https://storage.googleapis.com/moz-fx-translations-data--303e-prod-translations-data/db/models.json",
-    "pairs": ["enzh", "zhen"],
+    "pairs": [
+      "enzh",
+      "zhen"
+    ],
     "pinned": {
       "enzh": {
         "direction": "en-zh",
         "candidate": 1,
         "architecture": "base-memory",
         "files": {
-          "model": { "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/model.enzh.intgemm.alphas.bin.gz", "uncompressedSize": 43849787, "uncompressedHash": "4e5accc141373565ddc8fa1565bceaa8d0c3482a82cab8131c719ebcc6c2157c" },
-          "srcVocab": { "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/srcvocab.enzh.spm.gz" },
-          "trgVocab": { "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/trgvocab.enzh.spm.gz" },
-          "lexicalShortlist": { "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/lex.50.50.enzh.s2t.bin.gz" }
+          "model": {
+            "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/model.enzh.intgemm.alphas.bin.gz",
+            "uncompressedSize": 43849787,
+            "uncompressedHash": "4e5accc141373565ddc8fa1565bceaa8d0c3482a82cab8131c719ebcc6c2157c"
+          },
+          "srcVocab": {
+            "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/srcvocab.enzh.spm.gz"
+          },
+          "trgVocab": {
+            "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/trgvocab.enzh.spm.gz"
+          },
+          "lexicalShortlist": {
+            "path": "models/en-zh/llmaat_finetune10M_qe8_f2_ByQcSxGXQRqGi-UTxYE43g/exported/lex.50.50.enzh.s2t.bin.gz"
+          }
         }
       },
       "zhen": {
@@ -36,9 +85,434 @@
         "candidate": 0,
         "architecture": "base",
         "files": {
-          "model": { "path": "models/zh-en/cjk_icu_base_LQeOIbF7Sbq3XA8lsRPotw/exported/model.zhen.intgemm.alphas.bin.gz", "uncompressedSize": 59504955, "uncompressedHash": "3535442962ec8f4a553cc19b206befcac689ee9cddaea44fa91e21527fc30ac2" },
-          "vocab": { "path": "models/zh-en/cjk_icu_base_LQeOIbF7Sbq3XA8lsRPotw/exported/vocab.zhen.spm.gz" },
-          "lexicalShortlist": { "path": "models/zh-en/cjk_icu_base_LQeOIbF7Sbq3XA8lsRPotw/exported/lex.50.50.zhen.s2t.bin.gz" }
+          "model": {
+            "path": "models/zh-en/cjk_icu_base_LQeOIbF7Sbq3XA8lsRPotw/exported/model.zhen.intgemm.alphas.bin.gz",
+            "uncompressedSize": 59504955,
+            "uncompressedHash": "3535442962ec8f4a553cc19b206befcac689ee9cddaea44fa91e21527fc30ac2"
+          },
+          "vocab": {
+            "path": "models/zh-en/cjk_icu_base_LQeOIbF7Sbq3XA8lsRPotw/exported/vocab.zhen.spm.gz"
+          },
+          "lexicalShortlist": {
+            "path": "models/zh-en/cjk_icu_base_LQeOIbF7Sbq3XA8lsRPotw/exported/lex.50.50.zhen.s2t.bin.gz"
+          }
+        }
+      }
+    },
+    "allPairs": {
+      "generated": "2026-10-10T00:46:23Z",
+      "count": 118,
+      "pairs": [
+        "afen",
+        "aren",
+        "azen",
+        "been",
+        "bgen",
+        "bnen",
+        "bsen",
+        "caen",
+        "csen",
+        "daen",
+        "deen",
+        "elen",
+        "enaf",
+        "enar",
+        "enaz",
+        "enbe",
+        "enbg",
+        "enbn",
+        "enbs",
+        "enca",
+        "encs",
+        "enda",
+        "ende",
+        "enel",
+        "enes",
+        "enet",
+        "eneu",
+        "enfa",
+        "enfi",
+        "enfr",
+        "engl",
+        "engu",
+        "enhe",
+        "enhi",
+        "enhr",
+        "enhu",
+        "enid",
+        "enis",
+        "enit",
+        "enja",
+        "enkn",
+        "enko",
+        "enlt",
+        "enlv",
+        "enml",
+        "enmr",
+        "enms",
+        "ennb",
+        "ennl",
+        "enno",
+        "enpl",
+        "enpt",
+        "enro",
+        "enru",
+        "ensk",
+        "ensl",
+        "ensq",
+        "ensr",
+        "ensv",
+        "enta",
+        "ente",
+        "enth",
+        "entl",
+        "entr",
+        "enug",
+        "enuk",
+        "enur",
+        "envi",
+        "enzh",
+        "enzh_hant",
+        "esen",
+        "eten",
+        "euen",
+        "faen",
+        "fien",
+        "fren",
+        "glen",
+        "guen",
+        "hbsen",
+        "heen",
+        "hien",
+        "hren",
+        "huen",
+        "iden",
+        "isen",
+        "iten",
+        "jaen",
+        "knen",
+        "koen",
+        "lten",
+        "lven",
+        "mlen",
+        "mren",
+        "msen",
+        "nben",
+        "nlen",
+        "nnen",
+        "noen",
+        "plen",
+        "pten",
+        "roen",
+        "ruen",
+        "sken",
+        "slen",
+        "sqen",
+        "sren",
+        "sven",
+        "taen",
+        "teen",
+        "then",
+        "tlen",
+        "tren",
+        "ugen",
+        "uken",
+        "uren",
+        "vien",
+        "zh_hanten",
+        "zhen"
+      ]
+    },
+    "pivot": {
+      "jaen": {
+        "direction": "ja-en",
+        "candidate": 0,
+        "architecture": "base",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/ja-en/cjk_icu_base_U4VUAW3STh-bF0Sr-dX69g/exported/lex.50.50.jaen.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/ja-en/cjk_icu_base_U4VUAW3STh-bF0Sr-dX69g/exported/model.jaen.intgemm.alphas.bin.gz",
+            "uncompressedSize": 59504955,
+            "uncompressedHash": "a9bf800679bba570520e1161d7b4fbfcb957add32ca35812134add85689752ad"
+          },
+          "vocab": {
+            "path": "models/ja-en/cjk_icu_base_U4VUAW3STh-bF0Sr-dX69g/exported/vocab.jaen.spm.gz"
+          }
+        }
+      },
+      "enja": {
+        "direction": "en-ja",
+        "candidate": 1,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/en-ja/llmaat_finetune10M_qe8_f2_ApiGGQIwTKuF9i_k3n9Q2Q/exported/lex.50.50.enja.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/en-ja/llmaat_finetune10M_qe8_f2_ApiGGQIwTKuF9i_k3n9Q2Q/exported/model.enja.intgemm.alphas.bin.gz",
+            "uncompressedSize": 43849787,
+            "uncompressedHash": "59ae659f9bb63e4f81f474fe3c03d3f4499434b5f9e779fab7c12a45f31fd562"
+          },
+          "srcVocab": {
+            "path": "models/en-ja/llmaat_finetune10M_qe8_f2_ApiGGQIwTKuF9i_k3n9Q2Q/exported/srcvocab.enja.spm.gz"
+          },
+          "trgVocab": {
+            "path": "models/en-ja/llmaat_finetune10M_qe8_f2_ApiGGQIwTKuF9i_k3n9Q2Q/exported/trgvocab.enja.spm.gz"
+          }
+        }
+      },
+      "fren": {
+        "direction": "fr-en",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/fr-en/retrain_hr_EFgIftH_RrCyzl5gjemVNg/exported/lex.50.50.fren.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/fr-en/retrain_hr_EFgIftH_RrCyzl5gjemVNg/exported/model.fren.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "15f997bc0d13808b0b0fbd0786e684a3c8a52adcd8071844b76123fdacbf2b90"
+          },
+          "vocab": {
+            "path": "models/fr-en/retrain_hr_EFgIftH_RrCyzl5gjemVNg/exported/vocab.fren.spm.gz"
+          }
+        }
+      },
+      "enfr": {
+        "direction": "en-fr",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/en-fr/retrain_hr_NLIxDbE1TBGyOTI-zwZagw/exported/lex.50.50.enfr.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/en-fr/retrain_hr_NLIxDbE1TBGyOTI-zwZagw/exported/model.enfr.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "6322e296d4fecfe395a8d5723da4ec37ecbe6d7613bb1dfcf4b28e2a47498b68"
+          },
+          "vocab": {
+            "path": "models/en-fr/retrain_hr_NLIxDbE1TBGyOTI-zwZagw/exported/vocab.enfr.spm.gz"
+          }
+        }
+      },
+      "deen": {
+        "direction": "de-en",
+        "candidate": 1,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/de-en/retrain_hr2_WZOW24i4QJmIib61LeHfwg/exported/lex.50.50.deen.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/de-en/retrain_hr2_WZOW24i4QJmIib61LeHfwg/exported/model.deen.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "3e6f7c2c2425d10824797270b382bee718ff34af2cab9308841c82ca46dc6f20"
+          },
+          "vocab": {
+            "path": "models/de-en/retrain_hr2_WZOW24i4QJmIib61LeHfwg/exported/vocab.deen.spm.gz"
+          }
+        }
+      },
+      "ende": {
+        "direction": "en-de",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/en-de/retrain_hr_fix_names_SCgGhxUPQ2WAECHLRtzrMg/exported/lex.50.50.ende.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/en-de/retrain_hr_fix_names_SCgGhxUPQ2WAECHLRtzrMg/exported/model.ende.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "8df29d9494d19f47fd5d97c6a73474c6f657e9f81c1a607c431d02befdf3810f"
+          },
+          "vocab": {
+            "path": "models/en-de/retrain_hr_fix_names_SCgGhxUPQ2WAECHLRtzrMg/exported/vocab.ende.spm.gz"
+          }
+        }
+      },
+      "koen": {
+        "direction": "ko-en",
+        "candidate": 0,
+        "architecture": "base",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/ko-en/cjk_icu_base_BnKgBdd0Rzq87oUYN3L9-A/exported/lex.50.50.koen.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/ko-en/cjk_icu_base_BnKgBdd0Rzq87oUYN3L9-A/exported/model.koen.intgemm.alphas.bin.gz",
+            "uncompressedSize": 59504955,
+            "uncompressedHash": "1c902d6f7a8d7e3efe6ff4f7d4960a369957bca4ce2ce4a6e8572c231d525090"
+          },
+          "vocab": {
+            "path": "models/ko-en/cjk_icu_base_BnKgBdd0Rzq87oUYN3L9-A/exported/vocab.koen.spm.gz"
+          }
+        }
+      },
+      "enko": {
+        "direction": "en-ko",
+        "candidate": 0,
+        "architecture": "base",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/en-ko/cjk_hplt2_Fzrv_XPwTs6KVNkktUeuOA/exported/lex.50.50.enko.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/en-ko/cjk_hplt2_Fzrv_XPwTs6KVNkktUeuOA/exported/model.enko.intgemm.alphas.bin.gz",
+            "uncompressedSize": 59504955,
+            "uncompressedHash": "1c310a79b61b8824b2eb26b045db043d92722f3e66ea06998f7c89f48da9f6bc"
+          },
+          "vocab": {
+            "path": "models/en-ko/cjk_hplt2_Fzrv_XPwTs6KVNkktUeuOA/exported/vocab.enko.spm.gz"
+          }
+        }
+      },
+      "ruen": {
+        "direction": "ru-en",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/ru-en/next26_RSpwfHrcSUC_rKTnhOEXzw/exported/lex.50.50.ruen.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/ru-en/next26_RSpwfHrcSUC_rKTnhOEXzw/exported/model.ruen.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "aa0efa194b3dbd2da129ba0b8db8ef139126cb0914e57072f62061294746f1e2"
+          },
+          "vocab": {
+            "path": "models/ru-en/next26_RSpwfHrcSUC_rKTnhOEXzw/exported/vocab.ruen.spm.gz"
+          }
+        }
+      },
+      "enru": {
+        "direction": "en-ru",
+        "candidate": 0,
+        "architecture": "base",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/en-ru/student_base_AYqN3ysXRp2EGkEqeaA5Rg/exported/lex.50.50.enru.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/en-ru/student_base_AYqN3ysXRp2EGkEqeaA5Rg/exported/model.enru.intgemm.alphas.bin.gz",
+            "uncompressedSize": 42992955,
+            "uncompressedHash": "0ef9a209c5edc46692750e7505b3695655b1c7c3ec73058b641201ef18c481ce"
+          },
+          "vocab": {
+            "path": "models/en-ru/student_base_AYqN3ysXRp2EGkEqeaA5Rg/exported/vocab.enru.spm.gz"
+          }
+        }
+      },
+      "esen": {
+        "direction": "es-en",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/es-en/retrain_hr_HbNjJ60BTwmVTbhfFxuduA/exported/lex.50.50.esen.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/es-en/retrain_hr_HbNjJ60BTwmVTbhfFxuduA/exported/model.esen.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "4aed7734152ae0045d1a69ae49c86cfda18f53c61f90e95e1d1de1c7c7c3b033"
+          },
+          "vocab": {
+            "path": "models/es-en/retrain_hr_HbNjJ60BTwmVTbhfFxuduA/exported/vocab.esen.spm.gz"
+          }
+        }
+      },
+      "enes": {
+        "direction": "en-es",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/en-es/retrain_hr_fix_names_CUAEXUHoQum_cFqh-ZAryw/exported/lex.50.50.enes.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/en-es/retrain_hr_fix_names_CUAEXUHoQum_cFqh-ZAryw/exported/model.enes.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "3b1c399511c01c84c36fae5c0524df44096288efdc8236e182b5c97d7ad2244c"
+          },
+          "vocab": {
+            "path": "models/en-es/retrain_hr_fix_names_CUAEXUHoQum_cFqh-ZAryw/exported/vocab.enes.spm.gz"
+          }
+        }
+      },
+      "iten": {
+        "direction": "it-en",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/it-en/retrain_hr_d1nPDwVeSD6t-HdtWA4xNg/exported/lex.50.50.iten.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/it-en/retrain_hr_d1nPDwVeSD6t-HdtWA4xNg/exported/model.iten.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "21b70978ce2f3b4da7a06b5de86a09abe3acd30b9eee1b2ebb3582b9bad790bf"
+          },
+          "vocab": {
+            "path": "models/it-en/retrain_hr_d1nPDwVeSD6t-HdtWA4xNg/exported/vocab.iten.spm.gz"
+          }
+        }
+      },
+      "enit": {
+        "direction": "en-it",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/en-it/retrain_hr_fix_names_GPSr_u8PSmC9fOx1ZDCHoA/exported/lex.50.50.enit.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/en-it/retrain_hr_fix_names_GPSr_u8PSmC9fOx1ZDCHoA/exported/model.enit.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "248f47568788ecc351da7e5e07064d4153b4f71e011364ae2c931ffeec4d1cc2"
+          },
+          "vocab": {
+            "path": "models/en-it/retrain_hr_fix_names_GPSr_u8PSmC9fOx1ZDCHoA/exported/vocab.enit.spm.gz"
+          }
+        }
+      },
+      "pten": {
+        "direction": "pt-en",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/pt-en/retrain_hr_drxrs5bGSsOWvfK9lyZISw/exported/lex.50.50.pten.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/pt-en/retrain_hr_drxrs5bGSsOWvfK9lyZISw/exported/model.pten.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "7b854f1ec5a485dd33efd7c1bc01dd7d5a57f566957c5e47722af333f0ce9157"
+          },
+          "vocab": {
+            "path": "models/pt-en/retrain_hr_drxrs5bGSsOWvfK9lyZISw/exported/vocab.pten.spm.gz"
+          }
+        }
+      },
+      "enpt": {
+        "direction": "en-pt",
+        "candidate": 0,
+        "architecture": "base-memory",
+        "files": {
+          "lexicalShortlist": {
+            "path": "models/en-pt/retrain_hr_fix_names_Vnb0RUXTTd67hR-oLHM3eg/exported/lex.50.50.enpt.s2t.bin.gz"
+          },
+          "model": {
+            "path": "models/en-pt/retrain_hr_fix_names_Vnb0RUXTTd67hR-oLHM3eg/exported/model.enpt.intgemm.alphas.bin.gz",
+            "uncompressedSize": 31561787,
+            "uncompressedHash": "07892fd2544ee79dcb643615d8f2debb9793fae16842e87c328e27a3dd26a770"
+          },
+          "vocab": {
+            "path": "models/en-pt/retrain_hr_fix_names_Vnb0RUXTTd67hR-oLHM3eg/exported/vocab.enpt.spm.gz"
+          }
         }
       }
     }

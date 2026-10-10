@@ -234,9 +234,11 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
   `translate_engine.dll`，exe 目录零新增、零 `MKLROOT`；
   进程内只允许一个 Marian service（单 Engine，worker 线程独占拥有、
   多 pair 常驻，测试也不许并行建第二个）；翻译文件清单由 build.rs 从
-  `tools/models.lock.json` 生成进 `OUT_DIR`（`TRANSLATE_PAIRS`/`pair_files`/
-  `TRANSLATE_BASE`，Rust 侧只认这一份）；worker 内先分句再逐句翻译，
-  按目标语种回拼（zh 系无空格、其余单空格），reply 与 job 保持逐行 1:1。
+  `tools/models.lock.json` 生成进 `OUT_DIR`（`TRANSLATE_LANGS`/`pair_files`/
+  `TRANSLATE_BASE`/`TRANSLATE_KNOWN_PAIRS`，Rust 侧只认这一份；`pinned` 默认对 +
+  `pivot` 经 en 中转段同表烘焙，`allPairs` 是 registry 快照）；worker 内先分句
+  再逐句翻译，每段按本段目标回拼（zh 系无空格、其余单空格），pivot 在同一
+  worker 内两跳直连（texts→中间→最终），reply 与 job 保持逐行 1:1。
 - 构建产物（静态库）不进 git；CI 缓存 cmake 构建目录加速。
 
 ### 12.7 打包与合规
@@ -271,3 +273,40 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
 6. 工作线程翻译 + 状态机激活 + 语种下拉框 UI（覆盖渲染已就绪）。
 7. THIRD-PARTY-NOTICES + About + 文档。
 8. CI YAML：tag 触发，6 包 + SHA256SUMS。
+9. 像素级验证（截图服务恢复后补：下拉框/翻译按钮/下载面板/字幕压选中）。
+
+### 12.10 翻译交互细化（R1–R5，用户决议，已落地）
+
+- **R1 右键自动选中**：右键时若无选中（或选中文本为空），先把光标处的
+  文本框整框选中，再弹菜单；光标不在任何框上则保持原样（菜单项置灰）。
+- **R2 字幕压住选中**：绘制顺序改为 翻译字幕 > 蓝底白字选中
+  （原顺序画反了，选中盖住了字幕）。字幕按区域整块盖：
+  partial=选中包围盒一个区，full=每宏块一个区，`DT_WORDBREAK` 自动折行。
+- **R3 混合文本排除目标语言**：对探测文本计各语种字数，候选=全部−目标，
+  取数量最多的；若全是目标语则报"无需翻译"。探测文本：
+  partial=选中拼接，full=取最长宏块（单 job 单 pair，混语屏以主体为准）。
+- **R4 全文按宏块翻译**：行先按 (y,x) 排序聚类——垂直间隙 > 1.5×中位行高
+  或水平无交叠则另起一块，空文本行是天然边界。块内行连接：
+  真换行（下一行缩进 > 2 字宽 / 行隙 > 0.7 行高 / 下一行以 •/-/编号开头 /
+  上一行右端明显 ragged）补 `\n`，否则软换行（CJK 相邻无缝、其余单空格）。
+  每宏块整段送翻（保上下文），回填按区域整块覆盖（不再逐行 1:1；
+  worker 的 Vec 顺序对应保证不变）。
+- **R5 第三方语言下载确认**：源语种 ∉ {en, 系统 locale} 且模型缺失时，
+  先 `MessageBoxW(YESNO)`（语对 + 总 MB），Yes 才进下载面板，
+  No 则 toast 取消（不转外部）。en/locale 方向缺模型仍直接下载。
+- **R5-pivot 自动中转（经 en 两跳）**：registry 实测 118 对、无 `jazh/zhja/frzh`
+  等直连，只有经 en 的段。`translate::plan_for` 先直连（快照 + 烘焙文件表双
+  命中才算），否则 src/tgt 均非 en 时走 `src→en + en→tgt`（v1 只经 en）；
+  两段都无才转外部。确认框一次列两段 + 总 MB（烘焙 size 求和），下载同一面
+  板全局进度顺序拉两段，同一 worker 内先后载段、逐段分句翻译（texts→中间→
+  最终，reply 仍与 regions 逐一对应）。中转段（`translate.pivot`，ja/fr/de/
+  ko/ru/es/it/pt ↔ en 共 16 段，候选规则：首个 releaseStatus 含 Release 者，
+  否则首段）与默认对同表烘焙，运行时零 registry 拉取。
+- **latin-hint（零依赖）**：OCR 只给 Unicode，拉丁区块多语共享（Paddle `cls`
+  只判方向，Firefox 同样靠 lang 提示/手选），v1 不引 fastText。latin 桶获胜时
+  用重音（é/è/ñ/ü/ß/ç…计 2）+ 停用词（le/la/les/est、der/die/das、el/los…计 1）
+  投票，≥2 命中且与排除目标不同则修正（fr/de/es/it/pt）；误伤（如 café）由源
+  下拉覆盖，经 en 中转后呈 passthrough 形态。
+- **源下拉从烘焙全语对表派生**：`TRANSLATE_LANGS` 由 build.rs 从 `allPairs`
+  快照切分（含 `zh_hant` 特例），离线可用；第三方语种未下载模型也能先选，
+  走 R5 确认 + 下载链。

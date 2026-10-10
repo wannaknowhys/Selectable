@@ -45,7 +45,7 @@ fn main() {
     emit_translate_manifest(&root);
 }
 
-/// Read tools/models.lock.json translate.pinned and emit a Rust manifest so
+/// Read tools/models.lock.json translate.pinned+pivot and emit a Rust manifest so
 /// the runtime downloader never duplicates the file list.
 fn emit_translate_manifest(root: &Path) {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -59,21 +59,30 @@ fn emit_translate_manifest(root: &Path) {
         Ok(v) => v,
         Err(_) => return,
     };
-    let empty = serde_json::Map::new();
-    let pinned = lock
-        .pointer("/translate/pinned")
-        .and_then(|v| v.as_object())
-        .unwrap_or(&empty);
+    // legs = pinned (default pairs) + pivot (on-demand via-en legs). All share
+    // one schema and land in pair_files so the runtime downloader stays
+    // offline-capable (no live registry fetch).
+    let mut legs = serde_json::Map::new();
+    for key in ["pinned", "pivot"] {
+        if let Some(obj) = lock
+            .pointer(&format!("/translate/{key}"))
+            .and_then(|v| v.as_object())
+        {
+            for (pair, spec) in obj {
+                legs.insert(pair.clone(), spec.clone());
+            }
+        }
+    }
     let registry = lock
         .pointer("/translate/registry")
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let mut code = String::from(
-        "/// Generated from tools/models.lock.json translate.pinned (do not edit).\n\
+        "/// Generated from tools/models.lock.json translate.pinned+pivot (do not edit).\n\
          pub struct TranslateFile { pub key: &'static str, pub path: &'static str, pub size: u64, pub sha256: &'static str }\n",
     );
     let mut arms = String::new();
-    for (pair, spec) in pinned {
+    for (pair, spec) in &legs {
         let upper = pair.to_uppercase();
         code.push_str(&format!(
             "pub static PAIR_{upper}: &[TranslateFile] = &["
@@ -92,13 +101,60 @@ fn emit_translate_manifest(root: &Path) {
         arms.push_str(&format!("\"{pair}\" => Some(PAIR_{upper}),"));
     }
     code.push_str(&format!(
-        "pub static TRANSLATE_BASE: &str = \"{}\";\n\
-         pub static TRANSLATE_PAIRS: &[&str] = &[{}];\n\
-         pub fn pair_files(pair: &str) -> Option<&'static [TranslateFile]> {{ match pair {{ {arms} _ => None }} }}\n",
+        "pub static TRANSLATE_BASE: &str = \"{}\";\n",
         registry.trim_end_matches("/db/models.json"),
-        pinned.keys().map(|k| format!("\"{k}\"")).collect::<Vec<_>>().join(",")
+    ));
+    // Full registry pair snapshot (compact "jaen" form) for offline chain /
+    // pivot resolution. Refresh by rewriting translate.allPairs in the lock.
+    let all: Vec<String> = lock
+        .pointer("/translate/allPairs/pairs")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    code.push_str(&format!(
+        "pub static TRANSLATE_KNOWN_PAIRS: &[&str] = &[{}];\n",
+        all.iter().map(|k| format!("\"{k}\"")).collect::<Vec<_>>().join(",")
+    ));
+    // Dropdown source: every language code appearing in any known pair.
+    // Compact codes are 2+2 letters, except zh_hant ("enzh_hant",
+    // "zh_hanten"), split greedily here so Rust never duplicates the rule.
+    let mut langs = std::collections::BTreeSet::new();
+    for p in &all {
+        let (s, t) = split_compact(p);
+        if !s.is_empty() {
+            langs.insert(s);
+        }
+        if !t.is_empty() {
+            langs.insert(t);
+        }
+    }
+    code.push_str(&format!(
+        "pub static TRANSLATE_LANGS: &[&str] = &[{}];\n\
+         pub fn pair_files(pair: &str) -> Option<&'static [TranslateFile]> {{ match pair {{ {arms} _ => None }} }}\n",
+        langs.iter().map(|k| format!("\"{k}\"")).collect::<Vec<_>>().join(",")
     ));
     let _ = std::fs::write(&dest, code);
+}
+
+/// Split a compact registry pair ("enzh", "enzh_hant", "zh_hanten") into
+/// (src, tgt). zh_hant is the only 7-char code; everything else is 2+2.
+fn split_compact(p: &str) -> (String, String) {
+    if let Some(rest) = p.strip_prefix("zh_hant") {
+        return ("zh_hant".to_string(), rest.to_string());
+    }
+    if p.len() > 4 {
+        // Must be xx + zh_hant (the only long form in the registry).
+        if let Some(t) = p.get(2..) {
+            if t == "zh_hant" {
+                return (p[..2].to_string(), t.to_string());
+            }
+        }
+        return (String::new(), String::new());
+    }
+    if p.len() == 4 {
+        return (p[..2].to_string(), p[2..].to_string());
+    }
+    (String::new(), String::new())
 }
 
 /// Copy src -> dst dir if missing or size differs. Never fails the build.
