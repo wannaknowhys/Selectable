@@ -69,11 +69,6 @@ pub fn pair_for(src: &str, tgt: &str) -> Option<String> {
     }
 }
 
-/// Directions our registry snapshot actually ships (matches models.lock).
-pub fn known_pairs() -> &'static [&'static str] {
-    &["enzh", "zhen"]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

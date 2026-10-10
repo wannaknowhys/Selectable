@@ -79,12 +79,26 @@ fn default_search_url() -> String {
 struct TranslateSection {
     #[serde(default = "default_translate_url")]
     external_url: String,
+    /// Source language override ("auto" = detect per trigger).
+    #[serde(default = "default_auto")]
+    source_lang: String,
+    /// Target language ("auto" = follow system locale).
+    #[serde(default = "default_auto")]
+    target_lang: String,
 }
 
 impl Default for TranslateSection {
     fn default() -> Self {
-        Self { external_url: default_translate_url() }
+        Self {
+            external_url: default_translate_url(),
+            source_lang: default_auto(),
+            target_lang: default_auto(),
+        }
     }
+}
+
+fn default_auto() -> String {
+    "auto".to_string()
 }
 
 fn default_translate_url() -> String {
@@ -108,6 +122,8 @@ pub struct AppConfig {
     pub use_directml: bool,
     pub search_url: String,
     pub translate_url: String,
+    pub translate_source: String,
+    pub translate_target: String,
     pub save_dir: Option<String>,
 }
 
@@ -129,6 +145,8 @@ impl AppConfig {
                     use_directml: fc.ocr.use_directml,
                     search_url: fc.search.engine_url,
                     translate_url: fc.translate.external_url,
+                    translate_source: fc.translate.source_lang,
+                    translate_target: fc.translate.target_lang,
                     save_dir: fc.save.dir,
                 });
             }
@@ -141,6 +159,8 @@ impl AppConfig {
             use_directml: true,
             search_url: default_search_url(),
             translate_url: default_translate_url(),
+            translate_source: default_auto(),
+            translate_target: default_auto(),
             save_dir: None,
         })
     }

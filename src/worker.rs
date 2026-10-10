@@ -101,6 +101,8 @@ mod tests {
             use_directml: false,
             search_url: String::new(),
             translate_url: String::new(),
+            translate_source: "auto".to_string(),
+            translate_target: "auto".to_string(),
             save_dir: None,
         });
         let w = OcrWorker::spawn(&cfg);

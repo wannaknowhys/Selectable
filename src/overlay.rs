@@ -31,23 +31,27 @@ use windows::{
             Shell::{
                 FOLDERID_Documents, SHGetKnownFolderPath, ShellExecuteW, KF_FLAG_DEFAULT,
             },
-            Controls::Dialogs::{
-                CommDlgExtendedError, GetSaveFileNameW, OPENFILENAMEW, OFN_OVERWRITEPROMPT,
-                OFN_PATHMUSTEXIST,
+            Controls::{
+                Dialogs::{
+                    CommDlgExtendedError, GetSaveFileNameW, OPENFILENAMEW, OFN_OVERWRITEPROMPT,
+                    OFN_PATHMUSTEXIST,
+                },
+                InitCommonControlsEx, INITCOMMONCONTROLSEX, ICC_STANDARD_CLASSES,
             },
             WindowsAndMessaging::{
                 AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
                 DestroyWindow, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
                 GetSystemMetrics, GetWindowLongPtrW, GetWindowTextW, LoadCursorW,
-                PostQuitMessage, RegisterClassW, SetForegroundWindow,
+                PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
                 SetWindowLongPtrW, SetWindowTextW, TrackPopupMenu, TranslateMessage,
+                CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBN_SELCHANGE,
                 CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW,
                 MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING, MSG, SM_CXVIRTUALSCREEN,
                 SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWNORMAL,
                 TPM_RETURNCMD, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
                 WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
-                WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW,
-                WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, SetTimer,
+                WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW,
+                WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WS_VSCROLL, SetTimer,
             },
         },
     },
@@ -55,8 +59,10 @@ use windows::{
 
 use crate::{
     clipboard,
+    lang,
     monitors::{enum_monitors, focus_monitor, Mon},
     ocr::OcrLine,
+    translate::{self, TranslateWorker},
     worker::OcrReply,
 };
 
@@ -79,7 +85,16 @@ pub struct OverlayRequest {
     pub active_title: String,
     pub search_url: String,
     pub translate_url: String,
+    pub translate_source: String,
+    pub translate_target: String,
     pub save_dir: Option<String>,
+}
+
+/// Source language selection: Auto(detect) or a forced code.
+#[derive(Debug, Clone)]
+enum SrcSel {
+    Auto,
+    Lang(String),
 }
 
 /// Char position inside the OCR lines.
@@ -94,8 +109,24 @@ enum TMode {
 
 #[derive(Debug, Clone)]
 struct Translated {
-    mode: TMode,
     texts: Vec<String>, // per line; empty = untranslated
+}
+
+/// Awaiting translation: line indices + texts + mode + pair.
+struct PendingT {
+    idx: Vec<usize>,
+    texts: Vec<String>,
+    mode: TMode,
+    pair: String,
+}
+
+/// In-flight translation-model download (progress UI + cancel live here).
+struct DlState {
+    pair: String,
+    prog: std::sync::Arc<std::sync::Mutex<(usize, usize, u64, Option<u64>)>>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    done_rx: std::sync::mpsc::Receiver<Result<(), String>>,
+    cancel_rect: (i32, i32, i32, i32),
 }
 
 struct Toast {
@@ -172,8 +203,23 @@ struct State {
     tmode: TMode,
     want_full_label: bool,
     translated: Option<Translated>,
+    translating: bool,
+    pending: Option<PendingT>, // waiting on the translate worker
     btn_save: (i32, i32, i32, i32),
     btn_tr: (i32, i32, i32, i32),
+    combo_src_r: (i32, i32, i32, i32),
+    combo_tgt_r: (i32, i32, i32, i32),
+    // Language dropdowns (escape hatch over auto-detect).
+    combo_src: HWND,
+    combo_tgt: HWND,
+    src_items: Vec<String>, // index 0 = Auto
+    tgt_items: Vec<String>,
+    src_sel: SrcSel,
+    tgt: String,
+    src_cfg: String,
+    tgt_cfg: String,
+    tworker: Option<TranslateWorker>,
+    dl: Option<DlState>,
     ox: i32,
     oy: i32,
     mouse: (i32, i32),
@@ -278,8 +324,22 @@ fn show_overlay_inner(
             tmode: TMode::Idle,
             want_full_label: false,
             translated: None,
+            translating: false,
+            pending: None,
             btn_save: (0, 0, 0, 0),
             btn_tr: (0, 0, 0, 0),
+            combo_src_r: (0, 0, 0, 0),
+            combo_tgt_r: (0, 0, 0, 0),
+            combo_src: NULL_HWND,
+            combo_tgt: NULL_HWND,
+            src_items: vec!["Auto".to_string()],
+            tgt_items: Vec::new(),
+            src_sel: SrcSel::Auto,
+            tgt: lang::resolve_target(Some(&req.translate_target)),
+            src_cfg: req.translate_source.clone(),
+            tgt_cfg: req.translate_target.clone(),
+            tworker: None,
+            dl: None,
             ox: vx,
             oy: vy,
             mouse: (0, 0),
@@ -305,6 +365,24 @@ fn show_overlay_inner(
             Some(state.as_mut() as *mut State as *const _),
         )?;
         state.hwnd = hwnd;
+        // Language dropdowns (escape hatch over auto-detect).
+        let icc = INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_STANDARD_CLASSES,
+        };
+        let _ = InitCommonControlsEx(&icc);
+        let langs = pair_langs();
+        state.src_items = std::iter::once("Auto".to_string()).chain(langs.clone()).collect();
+        state.tgt_items = langs;
+        state.combo_src = create_combo(hwnd, state.combo_src_r)?;
+        state.combo_tgt = create_combo(hwnd, state.combo_tgt_r)?;
+        combo_add(state.combo_src, &state.src_items);
+        combo_add(state.combo_tgt, &state.tgt_items);
+        combo_select(state.combo_src, 0);
+        combo_select(
+            state.combo_tgt,
+            state.tgt_items.iter().position(|l| l == &state.tgt).unwrap_or(0),
+        );
         std::mem::forget(state);
         // Explicit show + topmost (belt and suspenders for exotic shells).
         {
@@ -335,29 +413,134 @@ fn show_overlay_inner(
 }
 fn layout_buttons(st: &mut State) {
     const BW: i32 = 140;
+    const CBW: i32 = 110;
     const BH: i32 = 44;
-    const GAP: i32 = 16;
-    // Buttons live on the focus (cursor) monitor, horizontally centered.
-    let total = BW * 2 + GAP;
+    const GAP: i32 = 12;
+    // Row on the focus (cursor) monitor: [save][src][tgt][translate].
+    let total = BW + CBW * 2 + BW + GAP * 3;
     let x0 = st.focus.cx() - total / 2;
     let mut y = st.focus.t + 24;
-    let rects = [(x0, y, x0 + BW, y + BH), (x0 + BW + GAP, y, x0 + total, y + BH)];
+    let mut rects = [
+        (x0, y, x0 + BW, y + BH),
+        (x0 + BW + GAP, y, x0 + BW + GAP + CBW, y + BH),
+        (x0 + BW + GAP + CBW + GAP, y, x0 + BW + GAP * 2 + CBW * 2, y + BH),
+        (
+            x0 + BW + GAP * 2 + CBW * 2 + GAP,
+            y,
+            x0 + total,
+            y + BH,
+        ),
+    ];
     // Auto-avoid: if any OCR box overlaps the row, move it near the bottom
     // of the same monitor.
-    for l in &st.lines {
+    'outer: for l in &st.lines {
         let (x0b, y0b, x1b, y1b) = l.quad.axis_aligned_bounds();
         let (x0b, y0b, x1b, y1b) = (x0b as i32, y0b as i32, x1b as i32, y1b as i32);
         for r in &rects {
             if x0b < r.2 + 8 && x1b > r.0 - 8 && y0b < r.3 + 8 && y1b > r.1 - 8 {
                 y = st.focus.b - 140;
-                st.btn_save = (x0, y, x0 + BW, y + BH);
-                st.btn_tr = (x0 + BW + GAP, y, x0 + total, y + BH);
-                return;
+                for r in rects.iter_mut() {
+                    let h = r.3 - r.1;
+                    r.1 = y;
+                    r.3 = y + h;
+                }
+                break 'outer;
             }
         }
     }
     st.btn_save = rects[0];
-    st.btn_tr = rects[1];
+    st.combo_src_r = rects[1];
+    st.combo_tgt_r = rects[2];
+    st.btn_tr = rects[3];
+    place_combos(st);
+}
+
+/// Two-letter codes appearing in any known pair, sorted.
+fn pair_langs() -> Vec<String> {
+    let mut langs = std::collections::BTreeSet::new();
+    for p in translate::TRANSLATE_PAIRS {
+        if p.len() == 4 {
+            langs.insert(p[..2].to_string());
+            langs.insert(p[2..].to_string());
+        }
+    }
+    langs.into_iter().collect()
+}
+
+fn combo_add(hwnd: HWND, items: &[String]) {
+    unsafe {
+        for it in items {
+            let w: Vec<u16> = it.encode_utf16().chain([0]).collect();
+            SendMessageW(
+                hwnd,
+                CB_ADDSTRING,
+                None,
+                Some(LPARAM(w.as_ptr() as isize)),
+            );
+        }
+    }
+}
+
+fn combo_select(hwnd: HWND, idx: usize) {
+    unsafe {
+        SendMessageW(hwnd, CB_SETCURSEL, Some(WPARAM(idx)), None);
+    }
+}
+
+fn combo_get(hwnd: HWND) -> usize {
+    unsafe {
+        let r = SendMessageW(hwnd, CB_GETCURSEL, None, None);
+        if r.0 < 0 {
+            0
+        } else {
+            r.0 as usize
+        }
+    }
+}
+
+fn create_combo(hwnd: HWND, r: (i32, i32, i32, i32)) -> Result<HWND> {
+    unsafe {
+        let h = CreateWindowExW(
+            Default::default(),
+            w!("COMBOBOX"),
+            w!(""),
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_VSCROLL
+                | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
+                    CBS_DROPDOWNLIST as u32,
+                ),
+            r.0,
+            r.1,
+            r.2 - r.0,
+            200, // dropdown list height; the edit box autosizes
+            Some(hwnd),
+            None,
+            None,
+            None,
+        )?;
+        Ok(h)
+    }
+}
+
+fn place_combos(st: &State) {
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW};
+        for (hwnd, r) in [(st.combo_src, st.combo_src_r), (st.combo_tgt, st.combo_tgt_r)] {
+            if hwnd.0.is_null() {
+                continue;
+            }
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                r.0,
+                r.1,
+                r.2 - r.0,
+                200, // dropdown list height; edit box autosizes
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+            );
+        }
+    }
 }
 
 /// Translate button: Idle press jumps straight to full; Partial/Full press
@@ -400,7 +583,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_LBUTTONDOWN => {
             let p = (loword(lp.0) as i32, hiword(lp.0) as i32);
             st.mouse = p;
-            if in_rect(p, st.btn_save) {
+            if st.dl.as_ref().map(|d| in_rect(p, d.cancel_rect)).unwrap_or(false) {
+                if let Some(d) = st.dl.as_ref() {
+                    d.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    show_toast(st, "取消中…".to_string());
+                }
+            } else if in_rect(p, st.btn_save) {
                 dlog(format!("down save {p:?}"));
                 do_quick_save(st);
             } else if in_rect(p, st.btn_tr) {
@@ -491,8 +679,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             LRESULT(0)
         }
         WM_COMMAND => {
-            // No child controls exist; with TPM_RETURNCMD the popup menu
-            // returns its result directly (see popup_menu), never via here.
+            // No child BUTTON controls exist anymore (owner-drawn); with
+            // TPM_RETURNCMD the popup menu returns directly (see popup_menu).
+            // The only WM_COMMAND traffic is CBN_SELCHANGE from the dropdowns.
+            if lp.0 != 0 {
+                let code = ((wp.0 >> 16) & 0xffff) as u32;
+                if code == CBN_SELCHANGE {
+                    let hw = HWND(lp.0 as _);
+                    if hw == st.combo_src {
+                        let i = combo_get(hw);
+                        st.src_sel = match st.src_items.get(i).map(|s| s.as_str()) {
+                            Some("Auto") | None => SrcSel::Auto,
+                            Some(l) => SrcSel::Lang(l.to_string()),
+                        };
+                    } else if hw == st.combo_tgt {
+                        let i = combo_get(hw);
+                        if let Some(l) = st.tgt_items.get(i) {
+                            st.tgt = l.clone();
+                        }
+                    }
+                }
+            }
             LRESULT(0)
         }
         WM_KEYDOWN => {
@@ -567,6 +774,67 @@ fn on_tick(st: &mut State, id: usize) {
             if level != st.toast_level {
                 st.toast_level = level;
                 dirty = true;
+            }
+        }
+    }
+    // Download progress + completion.
+    if st.dl.is_some() {
+        dirty = true; // progress bar + % advance every tick while downloading
+        let done = st.dl.as_ref().unwrap().done_rx.try_recv().ok();
+        if let Some(r) = done {
+            let dl = st.dl.take().unwrap();
+            match r {
+                Ok(()) => {
+                    show_toast(st, format!("模型 {} 下载完成，翻译中…", dl.pair));
+                    if let Some(pending) = st.pending.take() {
+                        submit_translate(st, pending);
+                    }
+                }
+                Err(e) => {
+                    st.pending = None;
+                    if e.contains("cancelled") {
+                        show_toast(st, "已取消下载".to_string());
+                    } else {
+                        show_toast(st, format!("下载失败：{e}"));
+                    }
+                }
+            }
+            dirty = true;
+        }
+    }
+    // Translate worker replies.
+    if st.translating {
+        if let Some(w) = st.tworker.as_mut() {
+            // Drain latest only; stale replies can't exist (one job at a time).
+            let mut last = None;
+            while let Ok(rep) = w.rx.try_recv() {
+                last = Some(rep);
+            }
+            if let Some(rep) = last {
+                st.translating = false;
+                if let Some(e) = rep.error {
+                    st.pending = None;
+                    show_toast(st, format!("翻译失败，已转外部：{e}"));
+                    open_url(&fill_url(&st.translate_url, &selected_or_all(st)));
+                } else if let Some(pending) = st.pending.take() {
+                    let mut texts = vec![String::new(); st.lines.len()];
+                    for (li, t) in pending.idx.iter().zip(rep.texts.iter()) {
+                        if *li < texts.len() {
+                            texts[*li] = t.clone();
+                        }
+                    }
+                    let mode = pending.mode;
+                    st.translated = Some(Translated { texts });
+                    st.tmode = match mode {
+                        TMode::Partial => TMode::Partial,
+                        _ => TMode::Full,
+                    };
+                    st.want_full_label = false;
+                    set_title(st, "Selectable — 翻译完成");
+                }
+                dirty = true;
+            } else {
+                dirty = true; // keep title spinner-ish feedback fresh
             }
         }
     }
@@ -701,7 +969,133 @@ fn preview(s: &str, n: usize) -> String {
     }
 }
 
-// ---------------- translation (placeholder engine) ----------------
+// ---------------- translation (real engine) ----------------
+
+fn translate_models_dir() -> std::path::PathBuf {
+    crate::ocr::models_root().join("translate")
+}
+
+/// Resolve (src, pair) for `text`; Err is user-facing toast text.
+fn resolve_pair(st: &State, text: &str) -> Result<(String, String), String> {
+    let src = match &st.src_sel {
+        SrcSel::Lang(l) => l.clone(),
+        SrcSel::Auto => {
+            if st.src_cfg.trim().is_empty() || st.src_cfg.eq_ignore_ascii_case("auto") {
+                lang::detect_script(text).to_string()
+            } else {
+                st.src_cfg.to_lowercase()
+            }
+        }
+    };
+    let tgt = if st.tgt.trim().is_empty() {
+        lang::resolve_target(Some(&st.tgt_cfg))
+    } else {
+        st.tgt.clone()
+    };
+    lang::pair_for(&src, &tgt)
+        .map(|p| (src, p))
+        .ok_or_else(|| "无需翻译".to_string())
+}
+
+/// Per-line payload for a scope: Partial = touched non-empty lines.
+fn scope_payload(st: &State, mode: TMode) -> Vec<(usize, String)> {
+    let idx: Vec<usize> = match mode {
+        TMode::Partial => match st.sel {
+            Some(((l0, _), (l1, _))) => (l0..=l1.min(st.lines.len().saturating_sub(1))).collect(),
+            None => vec![],
+        },
+        _ => (0..st.lines.len()).collect(),
+    };
+    idx.into_iter()
+        .filter_map(|li| {
+            let t = st.lines[li].text.clone();
+            if t.trim().is_empty() {
+                None
+            } else {
+                Some((li, t))
+            }
+        })
+        .collect()
+}
+
+/// Entry: translate scope in mode. Downloads models first when missing —
+/// no second press needed afterwards.
+fn start_translate(st: &mut State, mode: TMode) {
+    if !st.ready || st.translating || st.dl.is_some() {
+        return;
+    }
+    let items = scope_payload(st, mode);
+    if items.is_empty() {
+        show_toast(st, "先选中要翻译的文字".to_string());
+        return;
+    }
+    let probe = items[0].1.clone();
+    let (_src, pair) = match resolve_pair(st, &probe) {
+        Ok(v) => v,
+        Err(e) => {
+            show_toast(st, e);
+            return;
+        }
+    };
+    if translate::pair_files(&pair).is_none() {
+        // Entirely unknown pair: keep the old external-translator behavior.
+        show_toast(st, "暂不支持该语种组合，已转外部翻译".to_string());
+        open_url(&fill_url(&st.translate_url, &probe));
+        return;
+    }
+    let pending = PendingT {
+        idx: items.iter().map(|(i, _)| *i).collect(),
+        texts: items.iter().map(|(_, t)| t.clone()).collect(),
+        mode,
+        pair: pair.clone(),
+    };
+    if !translate::pair_complete(&translate_models_dir(), &pair) {
+        st.pending = Some(pending);
+        start_download(st, pair);
+        return;
+    }
+    submit_translate(st, pending);
+}
+
+fn submit_translate(st: &mut State, pending: PendingT) {
+    let models_dir = translate_models_dir();
+    let worker = st.tworker.get_or_insert_with(|| TranslateWorker::spawn(models_dir));
+    worker.submit(pending.pair.clone(), pending.texts.clone());
+    st.pending = Some(pending);
+    st.translating = true;
+    set_title(st, "Selectable — 翻译中…");
+}
+
+fn start_download(st: &mut State, pair: String) {
+    use std::sync::{atomic::AtomicBool, Arc, Mutex};
+    let n_files = translate::pair_files(&pair).map(|f| f.len()).unwrap_or(1);
+    let prog = Arc::new(Mutex::new((0usize, n_files, 0u64, None::<u64>)));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    let models_dir = translate_models_dir();
+    let pair2 = pair.clone();
+    let (prog2, cancel2) = (prog.clone(), cancel.clone());
+    std::thread::Builder::new()
+        .name("translate-dl".to_string())
+        .spawn(move || {
+            let r = translate::download_pair_blocking(&models_dir, &pair2, &prog2, &cancel2)
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(r);
+        })
+        .expect("spawn download thread");
+    // Cancel button sits under the progress panel (rect refined each paint).
+    let f = &st.focus;
+    let cx = (f.l + f.r) / 2;
+    let cy = (f.t + f.b) / 2;
+    st.dl = Some(DlState {
+        pair,
+        prog,
+        cancel,
+        done_rx: rx,
+        cancel_rect: (cx - 65, cy + 44, cx + 65, cy + 80),
+    });
+    invalidate(st);
+}
 
 /// Context-menu "翻译选中": partial overlay of the current selection.
 fn translate_menu(st: &mut State) {
@@ -709,33 +1103,11 @@ fn translate_menu(st: &mut State) {
         show_toast(st, "先选中要翻译的文字".to_string());
         return;
     }
-    // Engine stub: toasts instead of covering text. The state machine below
-    // runs unchanged once translate_engine() returns real results.
-    match translate_engine(st) {
-        Some(tr) => {
-            st.translated = Some(tr);
-            st.tmode = TMode::Partial;
-            invalidate(st);
-        }
-        None => show_toast(st, "离线翻译未就绪（占位）".to_string()),
-    }
+    start_translate(st, TMode::Partial);
 }
 
 fn translate_full(st: &mut State) {
-    match translate_engine(st) {
-        Some(mut tr) => {
-            tr.mode = TMode::Full;
-            st.translated = Some(tr);
-            st.tmode = TMode::Full;
-            invalidate(st);
-        }
-        None => show_toast(st, "离线翻译未就绪（占位）".to_string()),
-    }
-}
-
-/// Phase-2 slot: Bergamot enzh/zhen. Returns None until wired.
-fn translate_engine(_st: &State) -> Option<Translated> {
-    None
+    start_translate(st, TMode::Full);
 }
 
 // ---------------- paint ----------------
@@ -933,6 +1305,11 @@ fn paint(st: &mut State) {
             show_toast_paint(hdc, st, &text, alpha);
         }
 
+        // Download progress panel above all else while active.
+        if st.dl.is_some() {
+            paint_download(hdc, st);
+        }
+
         let _ = BitBlt(front, 0, 0, st.w as i32, st.h as i32, Some(hdc), 0, 0, SRCCOPY);
         let _ = EndPaint(st.hwnd, &ps);
     }
@@ -985,6 +1362,76 @@ fn draw_spinner_at(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State, cx: 
         let mut rc = RECT { left: cx - 130, top: cy + 44, right: cx + 130, bottom: cy + 80 };
         DrawTextW(hdc, &mut txt, &mut rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(hdc, old_font);
+    }
+}
+
+/// Download panel geometry (single source for paint + hit test).
+fn dl_layout(focus: &Mon) -> ((i32, i32, i32, i32), (i32, i32, i32, i32), (i32, i32, i32, i32)) {
+    let cx = (focus.l + focus.r) / 2;
+    let cy = (focus.t + focus.b) / 2;
+    let panel = (cx - 170, cy - 70, cx + 170, cy + 90);
+    let bar = (cx - 140, cy - 6, cx + 140, cy + 16);
+    let cancel = (cx - 65, cy + 44, cx + 65, cy + 80);
+    (panel, bar, cancel)
+}
+
+fn paint_download(hdc: windows::Win32::Graphics::Gdi::HDC, st: &mut State) {
+    // Snapshot first: `font_for` needs `&mut st`, so no borrow of `st.dl`
+    // may live past this line.
+    let Some((pair, prog)) = st.dl.as_ref().map(|d| (d.pair.clone(), d.prog.clone())) else { return };
+    let (panel, bar, cancel) = dl_layout(&st.focus);
+    unsafe {
+        // Panel.
+        let rgn = CreateRoundRectRgn(panel.0, panel.1, panel.2, panel.3, 24, 24);
+        let bg = CreateSolidBrush(COLORREF(0x141414));
+        let _ = FillRgn(hdc, rgn, bg);
+        let _ = DeleteObject(bg.into());
+        let _ = DeleteObject(rgn.into());
+        // Title.
+        let font = font_for(st, 20);
+        let old_font = SelectObject(hdc, font.into());
+        SetTextColor(hdc, COLORREF(0xFFFFFF));
+        SetBkMode(hdc, TRANSPARENT);
+        let mut title: Vec<u16> =
+            format!("下载翻译模型 {pair}").encode_utf16().collect();
+        let mut trc = RECT { left: panel.0, top: panel.1 + 10, right: panel.2, bottom: panel.1 + 36 };
+        DrawTextW(hdc, &mut title, &mut trc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        // Bar background + fill.
+        let (fi, n, done, total) = prog.lock().map(|p| *p).unwrap_or((0, 1, 0, None));
+        let bg_brush = CreateSolidBrush(COLORREF(0x3A3A3A));
+        let brc = RECT { left: bar.0, top: bar.1, right: bar.2, bottom: bar.3 };
+        FillRect(hdc, &brc, bg_brush);
+        let _ = DeleteObject(bg_brush.into());
+        let frac = if n == 0 {
+            0.0
+        } else {
+            let cur = total.map(|t| done as f64 / t.max(1) as f64).unwrap_or(0.0).clamp(0.0, 1.0);
+            ((fi as f64 + cur) / n as f64).clamp(0.0, 1.0)
+        };
+        let fill_w = ((bar.2 - bar.0) as f64 * frac) as i32;
+        if fill_w > 0 {
+            let fill = CreateSolidBrush(COLORREF(0x2E7AD6));
+            let frc = RECT { left: bar.0, top: bar.1, right: bar.0 + fill_w, bottom: bar.3 };
+            FillRect(hdc, &frc, fill);
+            let _ = DeleteObject(fill.into());
+        }
+        // Percent / bytes line.
+        let pct = format!(
+            "{}/{} · {}%",
+            fi.min(n).saturating_add(1).min(n.max(1)),
+            n.max(1),
+            (frac * 100.0) as u32
+        );
+        let mut txt: Vec<u16> = pct.encode_utf16().collect();
+        let mut prc = RECT { left: panel.0, top: bar.3 + 4, right: panel.2, bottom: cancel.1 - 4 };
+        DrawTextW(hdc, &mut txt, &mut prc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, old_font);
+    }
+    // Cancel button (same owner-drawn style as the global buttons).
+    paint_button(hdc, st, cancel, "取消");
+    // Remember for hit-testing (layout is stable, but cheap to refresh).
+    if let Some(dl) = st.dl.as_mut() {
+        dl.cancel_rect = cancel;
     }
 }
 
@@ -1369,8 +1816,15 @@ mod tests {
             ready: false, load_error: None, lines: Vec::new(), tier: String::new(),
             spinner: 0, sel: None, press_at: None, anchor: None, cursor: None,
             dragging: false, toast: None, toast_level: 0xFF, tmode: TMode::Idle, want_full_label: false,
-            translated: None,
-            btn_save: (0, 0, 0, 0), btn_tr: (0, 0, 0, 0), ox: 0, oy: 0, mouse: (0, 0),
+            translated: None, translating: false, pending: None,
+            combo_src: NULL_HWND, combo_tgt: NULL_HWND,
+            src_items: vec!["Auto".to_string()], tgt_items: Vec::new(),
+            src_sel: SrcSel::Auto, tgt: String::new(),
+            src_cfg: String::new(), tgt_cfg: String::new(),
+            tworker: None, dl: None,
+            btn_save: (0, 0, 0, 0), btn_tr: (0, 0, 0, 0),
+            combo_src_r: (0, 0, 0, 0), combo_tgt_r: (0, 0, 0, 0),
+            ox: 0, oy: 0, mouse: (0, 0),
             mons: vec![crate::monitors::Mon { l: 0, t: 0, r: 1920, b: 1080, primary: true }],
             focus: crate::monitors::Mon { l: 0, t: 0, r: 1920, b: 1080, primary: true },
             back: None,

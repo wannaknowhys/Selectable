@@ -28,10 +28,14 @@ windows = { version = "0.61", features = [
   "Win32_System_Ole",
   "Win32_Networking_WinHttp",
   "Win32_Globalization",
+  "Win32_UI_Controls",
 ] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 anyhow = "1"
+# Pure-Rust codecs for the runtime translation-model downloader.
+flate2 = "1"
+sha2 = "0.10"
 # Only the codecs we ship (PNG now, JPEG with the save-as todo).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 imageproc = "0.25"

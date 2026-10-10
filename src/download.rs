@@ -7,10 +7,6 @@ use std::sync::Arc;
 
 use windows::Win32::Networking::WinHttp::*;
 
-fn null_handle() -> *mut core::ffi::c_void {
-    std::ptr::null_mut()
-}
-
 struct Session(*mut core::ffi::c_void);
 impl Session {
     fn open() -> anyhow::Result<Self> {

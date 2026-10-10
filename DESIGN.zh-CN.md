@@ -226,7 +226,17 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
   pcre2 内部版（`SSPLIT_USE_INTERNAL_PCRE2=ON`）有一个 cmake 最低版本问题，
   打一行 patch 解决（仿照上游 `patches/` 目录）；`app/` CLI 不编（缺省 install 名问题），
   我们只链库；单 vocab 模型 config 里 vocab 写两遍；`BUILD_ARCH=x86-64`。
-  中英互翻质量确认可用。
+   中英互翻质量确认可用。
+- **formalize 结论（已落地）**：上游默认 `/MT` 与 Rust 最终链接（`/MD`，ort-sys）
+  冲突，`native/patches/msvc-dynamic-crt.patch` 由 xtask 幂等地打在 submodule
+  工作树上（`git status` 里 `m third_party/...` 是预期现象，新 clone 重跑
+  xtask 即重打，不 fork 不进 git）；MKL 静态三件套直接链进
+  `translate_engine.dll`，exe 目录零新增、零 `MKLROOT`；
+  进程内只允许一个 Marian service（单 Engine，worker 线程独占拥有、
+  多 pair 常驻，测试也不许并行建第二个）；翻译文件清单由 build.rs 从
+  `tools/models.lock.json` 生成进 `OUT_DIR`（`TRANSLATE_PAIRS`/`pair_files`/
+  `TRANSLATE_BASE`，Rust 侧只认这一份）；worker 内先分句再逐句翻译，
+  按目标语种回拼（zh 系无空格、其余单空格），reply 与 job 保持逐行 1:1。
 - 构建产物（静态库）不进 git；CI 缓存 cmake 构建目录加速。
 
 ### 12.7 打包与合规

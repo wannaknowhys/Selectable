@@ -70,14 +70,13 @@ fn emit_translate_manifest(root: &Path) {
         .unwrap_or("");
     let mut code = String::from(
         "/// Generated from tools/models.lock.json translate.pinned (do not edit).\n\
-         pub struct TranslateFile { pub key: &'static str, pub path: &'static str, pub size: u64, pub sha256: &'static str }\n\
-         pub struct TranslatePair { pub name: &'static str, pub direction: &'static str, pub files: &'static [TranslateFile] }\n",
+         pub struct TranslateFile { pub key: &'static str, pub path: &'static str, pub size: u64, pub sha256: &'static str }\n",
     );
+    let mut arms = String::new();
     for (pair, spec) in pinned {
-        let direction = spec.pointer("/direction").and_then(|v| v.as_str()).unwrap_or("");
+        let upper = pair.to_uppercase();
         code.push_str(&format!(
-            "pub static PAIR_{}: TranslatePair = TranslatePair {{ name: \"{pair}\", direction: \"{direction}\", files: &[",
-            pair.to_uppercase()
+            "pub static PAIR_{upper}: &[TranslateFile] = &["
         ));
         if let Some(files) = spec.pointer("/files").and_then(|v| v.as_object()) {
             for (key, f) in files {
@@ -89,11 +88,14 @@ fn emit_translate_manifest(root: &Path) {
                 ));
             }
         }
-        code.push_str("] };\n");
+        code.push_str("];\n");
+        arms.push_str(&format!("\"{pair}\" => Some(PAIR_{upper}),"));
     }
     code.push_str(&format!(
-        "pub static TRANSLATE_REGISTRY: &str = \"{registry}\";\n\
-         pub static TRANSLATE_PAIRS: &[&str] = &[{}];\n",
+        "pub static TRANSLATE_BASE: &str = \"{}\";\n\
+         pub static TRANSLATE_PAIRS: &[&str] = &[{}];\n\
+         pub fn pair_files(pair: &str) -> Option<&'static [TranslateFile]> {{ match pair {{ {arms} _ => None }} }}\n",
+        registry.trim_end_matches("/db/models.json"),
         pinned.keys().map(|k| format!("\"{k}\"")).collect::<Vec<_>>().join(",")
     ));
     let _ = std::fs::write(&dest, code);
