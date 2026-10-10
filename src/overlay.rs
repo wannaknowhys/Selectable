@@ -782,7 +782,8 @@ fn on_tick(st: &mut State, id: usize) {
         } else {
             // Quantize the fade to 8 levels: ~8 repaints per toast instead of 60.
             let remain = t.deadline.saturating_duration_since(Instant::now()).as_millis();
-            let level = if remain > 1000 { 8 } else { (remain * 8 / 1000) as u8 + 1 };
+            let level =
+                (if remain > 1000 { 8 } else { (remain * 8 / 1000) as u8 + 1 }).min(8);
             if level != st.toast_level {
                 st.toast_level = level;
                 dirty = true;
@@ -1228,6 +1229,19 @@ fn show_toast(st: &mut State, text: String) {
     invalidate(st);
 }
 
+/// Toast fade alpha for a quantized level 0..=8: 220 opaque at full, 0 gone.
+/// u16 math is load-bearing: the old `level * 220 / 8` in u8 overflowed past
+/// level 1 (7*220=1540) — debug builds abort, release builds wrap to garbage.
+/// Regression test below pins the table.
+fn toast_alpha(level: u8) -> u8 {
+    let a = level.min(8);
+    if a >= 8 {
+        220
+    } else {
+        (a as u16 * 220 / 8) as u8
+    }
+}
+
 fn in_rect(p: (i32, i32), r: (i32, i32, i32, i32)) -> bool {
     p.0 >= r.0 && p.0 < r.2 && p.1 >= r.1 && p.1 < r.3
 }
@@ -1378,13 +1392,7 @@ fn paint(st: &mut State) {
 
         // Toast on top of everything (alpha from the quantized level).
         let toast_data: Option<(String, u8)> = match &st.toast {
-            Some(t) => {
-                let a = st.toast_level.min(8);
-                // u16 math: a=7 gives 7*220=1540, far past u8 (debug builds
-                // panic on the overflow, release builds wrap to garbage).
-                let alpha = if a >= 8 { 220 } else { (a as u16 * 220 / 8) as u8 };
-                Some((t.text.clone(), alpha))
-            }
+            Some(t) => Some((t.text.clone(), toast_alpha(st.toast_level))),
             None => None,
         };
         if let Some((text, alpha)) = toast_data {
@@ -1947,9 +1955,9 @@ mod tests {
         assert_eq!(range_text(&st, ((0, 2), (1, 2))), "cd\n截屏");
         assert_eq!(range_text(&st, ((1, 0), (1, 1))), "截");
     }
-
     #[test]
     fn dropdown_derives_from_full_registry_table() {
+
         // Baked TRANSLATE_LANGS (not just the two default pairs): third
         // languages must be selectable before any model is downloaded.
         let langs = pair_langs();
@@ -1960,6 +1968,24 @@ mod tests {
         let mut sorted = langs.clone();
         sorted.sort();
         assert_eq!(langs, sorted, "dropdown order must be sorted");
+    }
+
+    #[test]
+    fn toast_alpha_table() {
+        // Regression: u8 `level * 220` overflowed past level 1 (debug abort,
+        // release wrap). Pinned values: level*220/8, 220 cap at 8+.
+        assert_eq!(
+            (0..=9u8).map(toast_alpha).collect::<Vec<_>>(),
+            vec![0, 27, 55, 82, 110, 137, 165, 192, 220, 220]
+        );
+        assert_eq!(toast_alpha(0xFF), 220, "sentinel clamps, never panics");
+        let mut prev = 0u8;
+        for l in 0..=9u8 {
+            let a = toast_alpha(l);
+            assert!(a >= prev, "fade must be monotonic");
+            assert!(a <= 220);
+            prev = a;
+        }
     }
 
     #[test]
