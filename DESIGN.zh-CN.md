@@ -154,7 +154,9 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
 - **B（字符级精度）已实施**：Paddle 单字坐标是 `CTCLabelDecode` 后处理（Apache-2.0，
   非新模型，已抄入 `decode()`）：每个 emit 字符记录 CTC timestep 跨度→crop 横向比例→
   行框边插值反推字条，长按按字条定起止，不再均分。横排文字准；竖排回退整框。
-- **Toast**：复制后左下角圆角半透明条，白字显示所复制文字，3 秒淡出（100ms 步进），
+- **Toast**：复制后左下角圆角半透明条，白字显示所复制文字，3 秒淡出（8 档
+  量化，约 8 次重绘而非 60 次；透明度经纯函数 `toast_alpha()` 计算，
+  u16 算术——u8 `level*220` 会溢出 abort，回归单测 `toast_alpha_table` 锁表），
   超长截断。
 - **翻译（占位）**：引擎未接，按钮/菜单动作为 toast 提示；状态机已定：
   `翻译 →（右键部分翻译）覆盖+按钮变"取消翻译" →（按）回原文+按钮变"全文翻译"`
@@ -273,7 +275,12 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
 6. 工作线程翻译 + 状态机激活 + 语种下拉框 UI（覆盖渲染已就绪）。
 7. THIRD-PARTY-NOTICES + About + 文档。
 8. CI YAML：tag 触发，6 包 + SHA256SUMS。
-9. 像素级验证（截图服务恢复后补：下拉框/翻译按钮/下载面板/字幕压选中）。
+9. 像素级验证（已部分完成：下拉框/`ja` 选中、翻译按钮、全文中文字幕压框、
+  pivot 确认框两段+99MB、jaen 链式下载落盘；待补：下载面板截图、字幕压选中
+  特写、右键菜单）。真机会话方法：overlay 经 `agy-run`（`lpDesktop =
+  WinSta0\Default`）前台跑进交互桌面，`SELECTABLE_DEBUG=1` 写 `clicks.log`
+  给精确坐标；computer-use 在双屏下落点恒为发送 X 的一半（右半屏不可达），
+  点物理 P 发 `2P`，模态框用键盘（Enter/Esc/方向键）。
 
 ### 12.10 翻译交互细化（R1–R5，用户决议，已落地）
 

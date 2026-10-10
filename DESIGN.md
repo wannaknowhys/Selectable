@@ -161,7 +161,9 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   screen strip via quad-edge interpolation. Long-press selects by strips, no more
   even splitting. Accurate for horizontal text; vertical falls back to whole-box.
 - **Toast**: bottom-left rounded translucent strip showing copied text, fades out
-  over 3s (100ms steps), truncated when long.
+  over 3s (8 quantized levels, ~8 repaints instead of 60; alpha comes from the
+  pure `toast_alpha()` — u16 math, since u8 `level*220` overflows and aborts;
+  the `toast_alpha_table` regression test pins the table), truncated when long.
 - **Translation (placeholder)**: engine not wired yet; actions toast instead. State
   machine (final): `Translate → (context-menu partial) overlay + "Cancel" → (press)
   original + "Full" → (press) full overlay + "Cancel" → (press) original + "Full"…`.
@@ -283,8 +285,14 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
 6. Worker-thread translation + state-machine activation + language dropdown UI (rendering ready).
 7. THIRD-PARTY-NOTICES + About + docs.
 8. CI YAML: tag releases, 6 zips + SHA256SUMS.
-9. Pixel-level verification (once screenshots work again: dropdowns /
-translate button / download panel / subtitle-over-selection).
+9. Pixel-level verification (partly done: dropdowns/`ja` pick, translate button,
+  full Chinese subtitles over boxes, pivot confirm with both legs + 99MB, jaen
+  chain download on disk; left: download-panel shot, subtitle close-up,
+  right-click menu). Live-session method: run the overlay foreground via
+  `agy-run` (`lpDesktop = WinSta0\Default`) into the interactive desktop,
+  `SELECTABLE_DEBUG=1` logs exact coords to `clicks.log`; under dual screens
+  computer-use lands at half the sent X (right half unreachable) — send `2P`
+  for physical P, drive modal boxes with keys (Enter/Esc/arrows).
 
 ### 12.10 Translation interaction refinements (R1–R5, user-decided, landed)
 
