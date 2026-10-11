@@ -1079,11 +1079,13 @@ fn start_translate(st: &mut State, mode: TMode) {
             return;
         }
         Err(e) => {
+            dlog(format!("start_translate resolve-err: {e} probe={}", preview(&probe, 60)));
             show_toast(st, e);
             return;
         }
     };
     let label = legs.join("+");
+    dlog(format!("start_translate legs={label} src={src} tgt={tgt}"));
     let pending = PendingT { regions, mode, chain: legs.clone() };
     if !translate::chain_complete(&translate_models_dir(), &legs) {
         // R5: third-language downloads ask first (legs + total MB shown);
@@ -1988,6 +1990,149 @@ mod tests {
         }
     }
 
+    /// Offscreen helper: 400x300 white canvas, read back as RGBA buf + RgbImage.
+    #[cfg(test)]
+    fn readback_400x300(
+        mem: windows::Win32::Graphics::Gdi::HDC,
+        bmp: windows::Win32::Graphics::Gdi::HBITMAP,
+    ) -> (Vec<u8>, image::RgbImage) {
+        use windows::Win32::Graphics::Gdi::{
+            GetDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        };
+        unsafe {
+            let mut bmi: BITMAPINFO = std::mem::zeroed();
+            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            bmi.bmiHeader.biWidth = 400;
+            bmi.bmiHeader.biHeight = -300;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB.0 as u32;
+            let mut buf = vec![0u8; 400 * 300 * 4];
+            assert!(
+                GetDIBits(mem, bmp, 0, 300, Some(buf.as_mut_ptr() as *mut _), &mut bmi, DIB_RGB_COLORS)
+                    > 0
+            );
+            let mut img = image::RgbImage::new(400, 300);
+            for (i, p) in img.pixels_mut().enumerate() {
+                let o = i * 4;
+                p.0 = [buf[o + 2], buf[o + 1], buf[o]];
+            }
+            (buf, img)
+        }
+    }
+
+    #[test]
+    fn download_panel_paints() {
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, FillRect, GetDC,
+            SelectObject,
+        };
+        unsafe {
+            let screen = GetDC(Some(NULL_HWND));
+            let mem = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, 400, 300);
+            let old = SelectObject(mem, bmp.into());
+            let white = CreateSolidBrush(COLORREF(0xFFFFFF));
+            let rc = RECT { left: 0, top: 0, right: 400, bottom: 300 };
+            FillRect(mem, &rc, white);
+            let _ = DeleteObject(white.into());
+
+            let mut st = toy_state();
+            st.focus = crate::monitors::Mon { l: 0, t: 0, r: 400, b: 300, primary: true };
+            let (_tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+            st.dl = Some(DlState {
+                label: "jaen+enzh".to_string(),
+                prog: std::sync::Arc::new(std::sync::Mutex::new((1usize, 4usize, 512u64, Some(1024u64)))),
+                cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                done_rx: rx,
+                cancel_rect: (0, 0, 0, 0),
+            });
+            paint_download(mem, &mut st);
+
+            let (buf, img) = readback_400x300(mem, bmp);
+            let _ = img.save("temp/dl-panel.png");
+            // Panel bg 0x141414 (dark) + bar fill 0x2E7AD6 (R214 G122 B46).
+            // frac = (1 + 512/1024) / 4 = 0.375 -> ~105x22 blue px.
+            let (mut dark, mut blue) = (0, 0);
+            for px in buf.chunks_exact(4) {
+                let lum = px[0] as u32 + px[1] as u32 + px[2] as u32;
+                if lum < 120 {
+                    dark += 1;
+                }
+                if px[2] > 150 && (px[2] as i32) > (px[0] as i32) + 50 {
+                    blue += 1;
+                }
+            }
+            eprintln!("dl panel pixels: dark={dark} blue={blue}");
+            assert!(dark > 5000, "panel did not paint dark");
+            assert!(blue > 500, "progress fill missing");
+            SelectObject(mem, old);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mem);
+            let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(NULL_HWND), screen);
+        }
+    }
+
+    #[test]
+    fn translated_subtitle_covers_region() {
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, FillRect, GetDC,
+            SelectObject,
+        };
+        unsafe {
+            let screen = GetDC(Some(NULL_HWND));
+            let mem = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, 400, 300);
+            let old = SelectObject(mem, bmp.into());
+            let white = CreateSolidBrush(COLORREF(0xFFFFFF));
+            let rc = RECT { left: 0, top: 0, right: 400, bottom: 300 };
+            FillRect(mem, &rc, white);
+            let _ = DeleteObject(white.into());
+
+            // Subtitle bg 0x1E3C1E (R30 G60 B30) over rect, white CJK text.
+            let mut st = toy_state();
+            let tr = Translated {
+                regions: vec![TransRegion {
+                    rect: (50, 60, 250, 120),
+                    font_px: 20,
+                    text: "你好世界".to_string(),
+                }],
+            };
+            paint_translated(mem, &mut st, &tr);
+
+            let (buf, img) = readback_400x300(mem, bmp);
+            let _ = img.save("temp/subtitle.png");
+            let (mut green_in, mut white_in, mut white_out) = (0, 0, 0);
+            for y in 0..300 {
+                for x in 0..400 {
+                    let o = (y * 400 + x) * 4;
+                    let (b, g, r) = (buf[o], buf[o + 1], buf[o + 2]);
+                    let lum = b as u32 + g as u32 + r as u32;
+                    let inside = x >= 50 && x < 250 && y >= 60 && y < 120;
+                    if inside {
+                        // Greenish panel (G dominant, dark).
+                        if g > r && g > b && g < 150 {
+                            green_in += 1;
+                        }
+                        if lum > 700 {
+                            white_in += 1;
+                        }
+                    } else if lum < 700 {
+                        white_out += 1;
+                    }
+                }
+            }
+            eprintln!("subtitle pixels: green_in={green_in} white_in={white_in} nonwhite_out={white_out}");
+            assert!(green_in > 3000, "subtitle panel did not cover its region");
+            assert!(white_in > 20, "subtitle text missing");
+            assert!(white_out == 0, "paint leaked outside the region");
+            SelectObject(mem, old);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mem);
+            let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(NULL_HWND), screen);
+        }
+    }
+
     #[test]
     fn spinner_frame_is_visible() {        use windows::Win32::Graphics::Gdi::{
             CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, FillRect, GetDC,
@@ -2044,7 +2189,6 @@ mod tests {
             let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(NULL_HWND), screen);
         }
     }
-
     /// Bisect: which fill primitive actually darkens pixels on this toolchain?
     #[test]
     fn gdi_fill_bisect() {
