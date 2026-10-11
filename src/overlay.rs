@@ -220,7 +220,6 @@ struct State {
     toast: Option<Toast>,
     toast_level: u8, // last painted fade level; 0xFF forces repaint
     tmode: TMode,
-    want_full_label: bool,
     translated: Option<Translated>,
     translating: bool,
     pending: Option<PendingT>, // waiting on the translate worker
@@ -342,7 +341,6 @@ fn show_overlay_inner(
             toast: None,
             toast_level: 0xFF,
             tmode: TMode::Idle,
-            want_full_label: false,
             translated: None,
             translating: false,
             pending: None,
@@ -558,18 +556,30 @@ fn place_combos(st: &State) {
     }
 }
 
-/// Translate button: Idle press jumps straight to full; Partial/Full press
-/// cancels back to original (label becomes 全文翻译 per spec).
+/// Anything started (in flight or painted) offers cancel; idle offers work.
+/// One predicate drives the big button, its paint label, and the menu item.
+fn tr_busy(st: &State) -> bool {
+    st.translating || st.tmode != TMode::Idle
+}
+
+/// Shared cancel for the button and the menu: drop the job (a late worker
+/// reply finds pending=None and is discarded; the reply drain takes latest
+/// only, so nothing poisons the next run) and clear painted subtitles.
+fn cancel_translation(st: &mut State) {
+    st.translated = None;
+    st.pending = None;
+    st.translating = false;
+    st.tmode = TMode::Idle;
+    set_title(st, "Selectable");
+    invalidate(st);
+}
+
+/// Translate button: idle starts full; busy cancels back to original.
 fn translate_button(st: &mut State) {
-    match st.tmode {
-        TMode::Idle => translate_full(st),
-        TMode::Partial | TMode::Full => {
-            st.translated = None;
-            st.tmode = TMode::Idle;
-            st.want_full_label = true;
-            set_title(st, "Selectable");
-            invalidate(st);
-        }
+    if tr_busy(st) {
+        cancel_translation(st);
+    } else {
+        translate_full(st);
     }
 }
 
@@ -863,7 +873,6 @@ fn on_tick(st: &mut State, id: usize) {
                         TMode::Partial => TMode::Partial,
                         _ => TMode::Full,
                     };
-                    st.want_full_label = false;
                     set_title(st, "Selectable — 翻译完成");
                 }
                 dirty = true;
@@ -1076,7 +1085,13 @@ fn build_regions(st: &State, mode: TMode) -> Vec<RegionJob> {
 /// Entry: translate scope in mode. Downloads models first when missing —
 /// no second press needed afterwards.
 fn start_translate(st: &mut State, mode: TMode) {
-    if !st.ready || st.translating || st.dl.is_some() {
+    if !st.ready || st.translating {
+        return;
+    }
+    if st.dl.is_some() {
+        // The button/menu offer cancel while busy, so this only fires when a
+        // download panel (with its own 取消) owns the job: say so, don't mute.
+        show_toast(st, "下载中…".to_string());
         return;
     }
     let regions = build_regions(st, mode);
@@ -1410,12 +1425,7 @@ fn paint(st: &mut State) {
             let _ = DeleteObject(dot.into());
             // Buttons.
             paint_button(hdc, st, st.btn_save, "保存");
-            let label = match st.tmode {
-                TMode::Idle if st.want_full_label => "全文翻译",
-                TMode::Idle => "翻译",
-                TMode::Partial | TMode::Full => "取消翻译",
-            };
-            paint_button(hdc, st, st.btn_tr, label);
+            paint_button(hdc, st, st.btn_tr, if tr_busy(st) { "取消翻译" } else { "翻译" });
         } else {
             // Spinner while the worker runs.
             paint_spinner(hdc, st);
@@ -1707,7 +1717,12 @@ fn popup_menu(st: &mut State) {
         let _ = AppendMenuW(menu, MF_STRING, M_COPY_ALL, w!("复制全部文本"));
         let _ = AppendMenuW(menu, menu_flags(!st.lines.is_empty()), M_SELECT_ALL, w!("全选"));
         let _ = AppendMenuW(menu, menu_flags(has_sel), M_SEARCH, w!("浏览器搜索"));
-        let _ = AppendMenuW(menu, menu_flags(has_sel), M_TRANSLATE, w!("翻译选中"));
+        if tr_busy(st) {
+            // Cancel needs no selection: always enabled.
+            let _ = AppendMenuW(menu, MF_STRING, M_TRANSLATE, w!("取消翻译"));
+        } else {
+            let _ = AppendMenuW(menu, menu_flags(has_sel), M_TRANSLATE, w!("翻译选中"));
+        }
         let _ = AppendMenuW(menu, MF_STRING, M_SAVE, w!("保存截图"));
         let _ = AppendMenuW(menu, MF_STRING, M_SAVE_AS, w!("另存为…"));
         let _ = AppendMenuW(menu, MF_STRING, M_ABOUT, w!("关于"));
@@ -1735,7 +1750,13 @@ fn popup_menu(st: &mut State) {
                 let url = fill_url(&st.search_url, &selected_or_all(st));
                 open_external(st, &url, "已在浏览器中打开搜索");
             }
-            M_TRANSLATE => translate_menu(st),
+            M_TRANSLATE => {
+                if tr_busy(st) {
+                    cancel_translation(st);
+                } else {
+                    translate_menu(st);
+                }
+            }
             M_SAVE => do_quick_save(st),
             M_SAVE_AS => do_save_as(st),
             M_ABOUT => crate::about::show_about(st.hwnd),
@@ -1972,7 +1993,7 @@ mod tests {
             hwnd: NULL_HWND, rx: std::ptr::null(),
             ready: false, load_error: None, lines: Vec::new(), tier: String::new(),
             spinner: 0, sel: None, press_at: None, anchor: None, cursor: None,
-            dragging: false, toast: None, toast_level: 0xFF, tmode: TMode::Idle, want_full_label: false,
+            dragging: false, toast: None, toast_level: 0xFF, tmode: TMode::Idle,
             translated: None, translating: false, pending: None,
             combo_src: NULL_HWND, combo_tgt: NULL_HWND,
             src_items: vec!["Auto".to_string()], tgt_items: Vec::new(),
@@ -2034,7 +2055,6 @@ mod tests {
         autoselect_at(&mut st, (50, 10));
         assert_eq!(selected_text(&st), "abcd");
     }
-
     #[test]
     fn select_all_covers_every_line() {
         let mut st = toy_state();
@@ -2046,6 +2066,35 @@ mod tests {
         st.lines.clear();
         select_all(&mut st);
         assert!(st.sel.is_none());
+    }
+
+    #[test]
+    fn translate_busy_unifies_button_and_menu() {
+        // One predicate drives both affordances: idle -> work, busy -> cancel.
+        let mut st = toy_state();
+        assert!(!tr_busy(&st));
+        st.translating = true;
+        assert!(tr_busy(&st), "in-flight job must offer cancel");
+        st.translating = false;
+        st.tmode = TMode::Partial;
+        assert!(tr_busy(&st), "painted subtitles must offer cancel");
+        st.tmode = TMode::Full;
+        assert!(tr_busy(&st));
+    }
+
+    #[test]
+    fn cancel_translation_resets_everything() {
+        let mut st = toy_state();
+        st.translated = Some(Translated { regions: Vec::new() });
+        st.pending = Some(PendingT { regions: Vec::new(), mode: TMode::Full, chain: Vec::new() });
+        st.translating = true;
+        st.tmode = TMode::Full;
+        cancel_translation(&mut st);
+        assert!(st.translated.is_none());
+        assert!(st.pending.is_none());
+        assert!(!st.translating);
+        assert_eq!(st.tmode, TMode::Idle);
+        assert!(!tr_busy(&st), "cancel returns to the translate affordance");
     }
 
     #[test]
