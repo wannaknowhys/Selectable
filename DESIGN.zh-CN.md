@@ -323,5 +323,18 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
 - **搜索预设**：`[search] engine` 取名（bing 默认 | google | ddg | baidu |
   wikipedia（zh）| qwant），模板来自本机 Firefox `omni.ja` 内
   `search-config-v2.json`（155 引擎：全局默认 google、zh-CN 默认 baidu，
-  合作方标记已剔除；wikipedia 上游只有 en，zh 子域系派生），显式
+  合作方标记已剔除；  wikipedia 上游只有 en，zh 子域系派生），显式
   `engine_url` 始终优先。
+- **翻译 source 单开关（决议，未实现）**：`[translate] source =
+  bergamot|online|external`（默认 bergamot）是唯一分发点；regions/probe/
+  (src,tgt) 只 resolve 一次，三个 executor 吃同一套输入（状态机不动）。
+  external 落地时 URL 模板加 `{tgt}`（Bergamot 码转 BCP47：zh→zh-CN 等，
+  旧模板无 `{tgt}` 不受影响）；online 涉及选型+key+隐私，另议。
+- **右键菜单全选**：`全选` 项选中全部 OCR 行（空屏则不选），之后复制/翻译/
+  搜索都作用于它。
+
+### 12.11 待办（CI 之后，先不做）
+
+- **界面多语言化（i18n）**：应用全部字符串（菜单/按钮/toast/对话框）走 string
+  table，`config.toml [ui] lang` 选择界面语言（默认 `auto` 跟系统 locale），
+  首版中英两表，查表带回退链。

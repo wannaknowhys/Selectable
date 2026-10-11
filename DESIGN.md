@@ -352,5 +352,21 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
 - **Search presets**: `[search] engine` by name (bing default | google | ddg |
   baidu | wikipedia (zh) | qwant); templates come from the local Firefox
   `omni.ja` `search-config-v2.json` (155 engines: global default google,
-  zh-CN default baidu, partner codes stripped; upstream ships wikipedia `en`
+  zh-CN default baidu, partner codes stripped;   upstream ships wikipedia `en`
   only, the `zh` subdomain is derived); an explicit `engine_url` always wins.
+- **Single translation-source switch (decided, not built)**: `[translate]
+  source = bergamot|online|external` (default bergamot) is the only dispatch
+  point; regions/probe/(src,tgt) resolve once and all three executors consume
+  the same input (state machine untouched). When external lands, its URL
+  template gains `{tgt}` (Bergamot code to BCP47: zh to zh-CN etc.; old
+  templates without `{tgt}` keep working); online needs provider/key/privacy
+  decisions first.
+- **Select-all menu item**: 全选 selects every OCR line (empty screen selects
+  nothing); copy/translate/search then act on it.
+
+### 12.11 Deferred (after CI, not started)
+
+- **UI internationalization (i18n)**: every app string (menus/buttons/toasts/
+  dialogs) goes through a string table, `config.toml [ui] lang` picks the UI
+  language (default `auto` follows the system locale), English + Chinese
+  tables first, lookup with a fallback chain.

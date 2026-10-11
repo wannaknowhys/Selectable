@@ -78,6 +78,7 @@ const M_SAVE: usize = 2005;
 const M_SAVE_AS: usize = 2006;
 const M_CLOSE: usize = 2007;
 const M_ABOUT: usize = 2008;
+const M_SELECT_ALL: usize = 2009;
 const TICK_MS: u32 = 50;
 const TIMER_TICK: usize = 1;
 const TIMER_CLOSE: usize = 2;
@@ -1185,6 +1186,18 @@ fn start_download(st: &mut State, legs: Vec<String>, label: String) {
     invalidate(st);
 }
 
+/// Select every OCR line (menu 全选). Empty screen selects nothing.
+fn select_all(st: &mut State) {
+    let Some(last) = st.lines.len().checked_sub(1) else {
+        st.sel = None;
+        return;
+    };
+    let c = st.lines[last].chars.len();
+    st.sel = Some(((0, 0), (last, c)));
+    set_title(st, &format!("Selectable — 已选中 {} 字", count_chars(st)));
+    invalidate(st);
+}
+
 /// R1: right-click with no (or empty) selection first selects the whole box
 /// under the cursor, so the menu always acts on something when possible.
 /// Must select ((li,0),(li,n)) like a tap: an empty caret range paints zero
@@ -1692,6 +1705,7 @@ fn popup_menu(st: &mut State) {
         let has_sel = st.sel.map(|r| !range_text(st, r).is_empty()).unwrap_or(false);
         let _ = AppendMenuW(menu, menu_flags(has_sel), M_COPY_SEL, w!("复制选中文本"));
         let _ = AppendMenuW(menu, MF_STRING, M_COPY_ALL, w!("复制全部文本"));
+        let _ = AppendMenuW(menu, menu_flags(!st.lines.is_empty()), M_SELECT_ALL, w!("全选"));
         let _ = AppendMenuW(menu, menu_flags(has_sel), M_SEARCH, w!("浏览器搜索"));
         let _ = AppendMenuW(menu, menu_flags(has_sel), M_TRANSLATE, w!("翻译选中"));
         let _ = AppendMenuW(menu, MF_STRING, M_SAVE, w!("保存截图"));
@@ -1716,6 +1730,7 @@ fn popup_menu(st: &mut State) {
                 let text = all_text(st);
                 copy_text(st, &text);
             }
+            M_SELECT_ALL => select_all(st),
             M_SEARCH => {
                 let url = fill_url(&st.search_url, &selected_or_all(st));
                 open_external(st, &url, "已在浏览器中打开搜索");
@@ -2018,6 +2033,19 @@ mod tests {
         st.sel = Some(((0, 2), (0, 2)));
         autoselect_at(&mut st, (50, 10));
         assert_eq!(selected_text(&st), "abcd");
+    }
+
+    #[test]
+    fn select_all_covers_every_line() {
+        let mut st = toy_state();
+        st.lines = vec![toy_line("abcd"), toy_line("截屏")];
+        select_all(&mut st);
+        assert_eq!(st.sel, Some(((0, 0), (1, 2))));
+        assert_eq!(selected_text(&st), "abcd\n截屏");
+        // Empty screen: selects nothing, never panics.
+        st.lines.clear();
+        select_all(&mut st);
+        assert!(st.sel.is_none());
     }
 
     #[test]
