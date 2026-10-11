@@ -5,6 +5,7 @@
 //
 // Assembles dist/Selectable/ (gitignored green layout):
 //   Selectable.exe + DirectML.dll + models/<tier>/... + config.toml (from example if missing)
+//   + THIRD-PARTY-NOTICES (repo root copy; every future zip includes it too).
 // Missing model tiers present in the repo lock are backfilled via tools/fetch-models.mjs.
 use std::path::{Path, PathBuf};
 
@@ -142,6 +143,8 @@ fn cmd_dist(args: &[String]) -> anyhow::Result<()> {
         copy_file(&root.join("config.example.toml"), &cfg)?;
         println!("[xtask] config.toml seeded from example");
     }
+    copy_file(&root.join("THIRD-PARTY-NOTICES"), &dist.join("THIRD-PARTY-NOTICES"))?;
+    println!("[xtask] THIRD-PARTY-NOTICES copied");
 
     println!(
         "[xtask] done: {} ({:.1} MB models)",

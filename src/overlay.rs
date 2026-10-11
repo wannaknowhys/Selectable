@@ -76,6 +76,7 @@ const M_TRANSLATE: usize = 2004;
 const M_SAVE: usize = 2005;
 const M_SAVE_AS: usize = 2006;
 const M_CLOSE: usize = 2007;
+const M_ABOUT: usize = 2008;
 const TICK_MS: u32 = 50;
 const TIMER_TICK: usize = 1;
 const TIMER_CLOSE: usize = 2;
@@ -1677,6 +1678,7 @@ fn popup_menu(st: &mut State) {
         let _ = AppendMenuW(menu, menu_flags(has_sel), M_TRANSLATE, w!("翻译选中"));
         let _ = AppendMenuW(menu, MF_STRING, M_SAVE, w!("保存截图"));
         let _ = AppendMenuW(menu, MF_STRING, M_SAVE_AS, w!("另存为…"));
+        let _ = AppendMenuW(menu, MF_STRING, M_ABOUT, w!("关于"));
         let _ = AppendMenuW(menu, MF_STRING, M_CLOSE, w!("关闭"));
         let mut pt = POINT { x: 0, y: 0 };
         let _ = GetCursorPos(&mut pt);
@@ -1700,6 +1702,7 @@ fn popup_menu(st: &mut State) {
             M_TRANSLATE => translate_menu(st),
             M_SAVE => do_quick_save(st),
             M_SAVE_AS => do_save_as(st),
+            M_ABOUT => crate::about::show_about(st.hwnd),
             M_CLOSE => {
                 let _ = DestroyWindow(st.hwnd);
             }

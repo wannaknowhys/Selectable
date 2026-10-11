@@ -1,0 +1,67 @@
+THIRD-PARTY NOTICES — Selectable
+====================================
+This file lists third-party components redistributed with, linked into, or
+downloaded at build/runtime by Selectable. Full license texts for the standard
+MIT / Apache-2.0 / MPL-2.0 licenses are not duplicated here; see the links.
+This file ships in the repo root and inside every release zip (dist/).
+
+1. OCR models — PP-OCRv6 (PaddlePaddle)
+   Source: https://github.com/PaddlePaddle/PaddleOCR
+   Weights: https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx (and
+   _rec_onnx, small_*_onnx; exact pins in tools/models.lock.json)
+   License: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+   Used as: det.onnx + rec.onnx (+ yml configs/dicts) run offline via ONNX
+   Runtime; shipped in models/<tier>/ (small/medium zips) or fetched by
+   tools/fetch-models.mjs.
+
+2. Translation models — firefox-translations-models (Mozilla)
+   Source: https://github.com/mozilla/firefox-translations-models
+   Registry: https://storage.googleapis.com/moz-fx-translations-data--303e-prod-translations-data/db/models.json
+   License: Mozilla Public License 2.0 (https://www.mozilla.org/MPL/2.0/)
+   Used as: int8 Bergamot model/vocab/shortlist triples downloaded on demand
+   into models/translate/<pair>/ (default enzh+zhen ship in the 6th zip).
+   Attribution: Mozilla / Bergamot consortium, EU Horizon 2020 grant 825303
+   (see also the in-app About dialog).
+
+3. Translation engine — bergamot-translator (browsermt)
+   Source: https://github.com/browsermt/bergamot-translator (pinned submodule,
+   see tools/models.lock.json note)
+   License: Mozilla Public License 2.0 (LICENSE file inside third_party/
+   bergamot-translator)
+   Used as: built from source by `cargo xtask build-translate` into the
+   private translate_engine.dll (keeps its protobuf copy isolated from ort's).
+
+4. marian-dev (bundled inside bergamot-translator)
+   Source: https://github.com/browsermt/marian-dev (3rd_party/marian-dev)
+   License: MIT License (LICENSE.md inside 3rd_party/marian-dev;
+   (c) 2016 Marcin Junczys-Dowmunt, University of Edinburgh,
+   Adam Mickiewicz University)
+
+5. Intel MKL 2020.1 (statically linked INSIDE translate_engine.dll)
+   Source: https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl.html
+   (build mirror pinned in xtask/src/translate.rs)
+   License: Intel Simplified Software License (ISSL)
+   Note: the static triple links into translate_engine.dll; nothing leaks
+   beside the exe and no MKLROOT is required at runtime.
+
+6. ONNX Runtime (Microsoft)
+   Source: https://github.com/microsoft/onnxruntime (via the `ort` crate
+   2.0.0-rc.13, which fetches native binaries at build time — never vendored)
+   License: MIT License
+
+7. DirectML (Microsoft)
+   Source: https://github.com/microsoft/DirectML (redistributed via the
+   ONNX Runtime native packages; DirectML.dll ships beside Selectable.exe)
+   License: MIT License
+
+8. Rust crates (MIT OR Apache-2.0 unless noted; versions from Cargo.lock)
+   anyhow 1.0.104, flate2 1.1.10, image 0.25.10, imageproc 0.25.1 (MIT),
+   ndarray 0.17.2, ort 2.0.0-rc.13, ort-sys 2.0.0-rc.13, serde 1.0.229,
+   serde_json 1.0.151, sha2 0.10.9, toml 0.8.23, windows 0.61.3,
+   windows-sys 0.61.2, ab_glyph 0.2.32 (dev-only test font raster, Apache-2.0).
+   Transitive dependencies are covered by the same MIT/Apache-2.0 dual
+   licensing; exact pins in Cargo.lock, texts in the cargo registry cache.
+
+9. System components (not redistributed)
+   MSVC C runtime (app-local deployment via /MD, Microsoft Visual Studio
+   license), Windows SDK / Win32 APIs (Windows license). No action needed.

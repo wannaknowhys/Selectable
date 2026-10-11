@@ -30,6 +30,7 @@ use crate::{config::AppConfig, worker::OcrWorker};
 const WM_TRAY: u32 = WM_APP + 10;
 const T_CAPTURE: usize = 3001;
 const T_QUIT: usize = 3002;
+const T_ABOUT: usize = 3003;
 
 struct Ctx {
     worker: OcrWorker,
@@ -159,6 +160,7 @@ fn tray_menu(ctx: &mut Ctx) {
             return;
         }
         let _ = AppendMenuW(menu, MF_STRING, T_CAPTURE, w!("截图取词"));
+        let _ = AppendMenuW(menu, MF_STRING, T_ABOUT, w!("关于"));
         let _ = AppendMenuW(menu, MF_STRING, T_QUIT, w!("退出"));
         let mut pt = windows::Win32::Foundation::POINT { x: 0, y: 0 };
         let _ = GetCursorPos(&mut pt);
@@ -169,6 +171,7 @@ fn tray_menu(ctx: &mut Ctx) {
         let _ = DestroyMenu(menu);
         match cmd.0 as usize {
             T_CAPTURE => do_capture(ctx),
+            T_ABOUT => crate::about::show_about(HWND(null_mut())),
             T_QUIT => {
                 let _ = DestroyWindow(hwnd);
             }
