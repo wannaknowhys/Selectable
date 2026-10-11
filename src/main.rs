@@ -13,6 +13,7 @@ mod lang;
 mod monitors;
 mod ocr;
 mod overlay;
+mod search;
 mod tray;
 mod translate;
 mod worker;
@@ -87,6 +88,7 @@ pub(crate) fn capture_and_show(
         active_title: title,
         search_url: cfg.search_url.clone(),
         translate_url: cfg.translate_url.clone(),
+        external_auto_exit: cfg.external_auto_exit,
         translate_source: cfg.translate_source.clone(),
         translate_target: cfg.translate_target.clone(),
         save_dir: cfg.save_dir.clone(),

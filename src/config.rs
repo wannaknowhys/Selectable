@@ -61,14 +61,21 @@ fn default_true() -> bool {
 
 #[derive(Debug, Deserialize)]
 struct SearchSection {
-    #[serde(default = "default_search_url")]
-    engine_url: String,
+    /// Preset name (see search::PRESETS); explicit engine_url wins when set.
+    #[serde(default = "default_search_engine")]
+    engine: String,
+    #[serde(default)]
+    engine_url: Option<String>,
 }
 
 impl Default for SearchSection {
     fn default() -> Self {
-        Self { engine_url: default_search_url() }
+        Self { engine: default_search_engine(), engine_url: None }
     }
+}
+
+fn default_search_engine() -> String {
+    crate::search::default_preset().to_string()
 }
 
 fn default_search_url() -> String {
@@ -79,6 +86,11 @@ fn default_search_url() -> String {
 struct TranslateSection {
     #[serde(default = "default_translate_url")]
     external_url: String,
+    /// Exit the overlay after any external browser launch (search + the
+    /// translate failure/unsupported fallbacks). The fullscreen cover would
+    /// otherwise hide the just-opened browser.
+    #[serde(default = "default_true")]
+    external_auto_exit: bool,
     /// Source language override ("auto" = detect per trigger).
     #[serde(default = "default_auto")]
     source_lang: String,
@@ -91,6 +103,7 @@ impl Default for TranslateSection {
     fn default() -> Self {
         Self {
             external_url: default_translate_url(),
+            external_auto_exit: true,
             source_lang: default_auto(),
             target_lang: default_auto(),
         }
@@ -122,6 +135,7 @@ pub struct AppConfig {
     pub use_directml: bool,
     pub search_url: String,
     pub translate_url: String,
+    pub external_auto_exit: bool,
     pub translate_source: String,
     pub translate_target: String,
     pub save_dir: Option<String>,
@@ -143,8 +157,12 @@ impl AppConfig {
                     cascade: fc.ocr.cascade,
                     rec_batch_size: fc.ocr.rec_batch_size.max(1),
                     use_directml: fc.ocr.use_directml,
-                    search_url: fc.search.engine_url,
+                    search_url: crate::search::resolve_url(
+                        fc.search.engine_url.as_deref(),
+                        &fc.search.engine,
+                    ),
                     translate_url: fc.translate.external_url,
+                    external_auto_exit: fc.translate.external_auto_exit,
                     translate_source: fc.translate.source_lang,
                     translate_target: fc.translate.target_lang,
                     save_dir: fc.save.dir,
@@ -159,6 +177,7 @@ impl AppConfig {
             use_directml: true,
             search_url: default_search_url(),
             translate_url: default_translate_url(),
+            external_auto_exit: true,
             translate_source: default_auto(),
             translate_target: default_auto(),
             save_dir: None,

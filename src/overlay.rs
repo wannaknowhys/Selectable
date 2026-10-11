@@ -89,6 +89,7 @@ pub struct OverlayRequest {
     pub active_title: String,
     pub search_url: String,
     pub translate_url: String,
+    pub external_auto_exit: bool,
     pub translate_source: String,
     pub translate_target: String,
     pub save_dir: Option<String>,
@@ -197,8 +198,8 @@ struct State {
     title: String,
     search_url: String,
     // Phase: Bergamot engine wiring.
-    #[allow(dead_code)]
     translate_url: String,
+    external_auto_exit: bool,
     save_dir: Option<String>,
     hwnd: HWND,
     // Async OCR.
@@ -323,6 +324,7 @@ fn show_overlay_inner(
             title: req.active_title,
             search_url: req.search_url,
             translate_url: req.translate_url,
+            external_auto_exit: req.external_auto_exit,
             save_dir: req.save_dir,
             hwnd: NULL_HWND,
             rx: rx as *const _,
@@ -839,8 +841,9 @@ fn on_tick(st: &mut State, id: usize) {
                 st.translating = false;
                 if let Some(e) = rep.error {
                     st.pending = None;
-                    show_toast(st, format!("翻译失败，已转外部：{e}"));
-                    open_url(&fill_url(&st.translate_url, &selected_or_all(st)));
+                    let url = fill_url(&st.translate_url, &selected_or_all(st));
+                    let msg = format!("翻译失败，已转外部：{e}");
+                    open_external(st, &url, &msg);
                 } else if let Some(pending) = st.pending.take() {
                     // Worker Vec order matches the submitted regions (R4).
                     let regions = pending
@@ -1086,8 +1089,8 @@ fn start_translate(st: &mut State, mode: TMode) {
         Ok(v) => v,
         Err(e) if e == "UNSUPPORTED" => {
             // No direct leg and no via-en pivot: external translator fallback.
-            show_toast(st, "暂不支持该语种组合，已转外部翻译".to_string());
-            open_url(&fill_url(&st.translate_url, &probe));
+            let url = fill_url(&st.translate_url, &probe);
+            open_external(st, &url, "暂不支持该语种组合，已转外部翻译");
             return;
         }
         Err(e) => {
@@ -1713,7 +1716,10 @@ fn popup_menu(st: &mut State) {
                 let text = all_text(st);
                 copy_text(st, &text);
             }
-            M_SEARCH => open_url(&fill_url(&st.search_url, &selected_or_all(st))),
+            M_SEARCH => {
+                let url = fill_url(&st.search_url, &selected_or_all(st));
+                open_external(st, &url, "已在浏览器中打开搜索");
+            }
             M_TRANSLATE => translate_menu(st),
             M_SAVE => do_quick_save(st),
             M_SAVE_AS => do_save_as(st),
@@ -1896,11 +1902,30 @@ fn fill_url(template: &str, text: &str) -> String {
     template.replace("{text}", &url_encode(text))
 }
 
-fn open_url(url: &str) {
+fn open_url(url: &str) -> bool {
     unsafe {
         let u = HSTRING::from(url);
-        let _ = ShellExecuteW(None, w!("open"), &u, None, None, SW_SHOWNORMAL);
+        ShellExecuteW(None, w!("open"), &u, None, None, SW_SHOWNORMAL).0 as isize > 32
     }
+}
+
+/// External browser launch shared by search + translate fallbacks. With
+/// external_auto_exit (default) the fullscreen cover closes on success so the
+/// user actually sees the just-opened browser; otherwise (or when the launch
+/// itself fails) a toast explains the state and the overlay stays.
+fn open_external(st: &mut State, url: &str, stay_msg: &str) {
+    if open_url(url) {
+        if st.external_auto_exit {
+            unsafe {
+                let _ = DestroyWindow(st.hwnd);
+            }
+            return;
+        }
+    } else {
+        show_toast(st, "打开浏览器失败".to_string());
+        return;
+    }
+    show_toast(st, stay_msg.to_string());
 }
 
 #[cfg(test)]
@@ -1927,7 +1952,8 @@ mod tests {
     fn toy_state() -> State {
         State {
             bgra: Vec::new(), w: 0, h: 0, title: String::new(),
-            search_url: String::new(), translate_url: String::new(), save_dir: None,
+            search_url: String::new(), translate_url: String::new(), external_auto_exit: true,
+            save_dir: None,
             hwnd: NULL_HWND, rx: std::ptr::null(),
             ready: false, load_error: None, lines: Vec::new(), tier: String::new(),
             spinner: 0, sel: None, press_at: None, anchor: None, cursor: None,

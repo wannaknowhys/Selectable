@@ -317,3 +317,11 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
 - **源下拉从烘焙全语对表派生**：`TRANSLATE_LANGS` 由 build.rs 从 `allPairs`
   快照切分（含 `zh_hant` 特例），离线可用；第三方语种未下载模型也能先选，
   走 R5 确认 + 下载链。
+- **外部呼叫自动退出**：菜单搜索、翻译失败/不支持兜底等一切外部浏览器呼叫，
+  成功后默认直接销毁全屏罩（否则新开的浏览器被盖住看不见），由
+  `[translate] external_auto_exit` 控制（`false` 则留罩 + toast）。
+- **搜索预设**：`[search] engine` 取名（bing 默认 | google | ddg | baidu |
+  wikipedia（zh）| qwant），模板来自本机 Firefox `omni.ja` 内
+  `search-config-v2.json`（155 引擎：全局默认 google、zh-CN 默认 baidu，
+  合作方标记已剔除；wikipedia 上游只有 en，zh 子域系派生），显式
+  `engine_url` 始终优先。

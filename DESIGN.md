@@ -344,3 +344,13 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   `TRANSLATE_LANGS` from the `allPairs` snapshot (with the `zh_hant` special
   case), usable offline; third languages are selectable before any model is
   downloaded and flow into the R5 confirm + download chain.
+- **Auto-exit on external calls**: every external browser launch (menu search,
+  translate failure/unsupported fallbacks) destroys the fullscreen cover on
+  success by default — otherwise the just-opened browser stays hidden behind
+  it; governed by `[translate] external_auto_exit` (`false` keeps the cover +
+  toast).
+- **Search presets**: `[search] engine` by name (bing default | google | ddg |
+  baidu | wikipedia (zh) | qwant); templates come from the local Firefox
+  `omni.ja` `search-config-v2.json` (155 engines: global default google,
+  zh-CN default baidu, partner codes stripped; upstream ships wikipedia `en`
+  only, the `zh` subdomain is derived); an explicit `engine_url` always wins.
