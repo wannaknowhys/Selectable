@@ -28,7 +28,7 @@ use windows::{
         },
         System::SystemInformation::GetLocalTime,
         UI::{
-            Input::KeyboardAndMouse::{GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_ESCAPE},
+            Input::KeyboardAndMouse::{GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_ESCAPE},
             Shell::{
                 FOLDERID_Documents, SHGetKnownFolderPath, ShellExecuteW, KF_FLAG_DEFAULT,
             },
@@ -45,7 +45,8 @@ use windows::{
                 GetSystemMetrics, GetWindowLongPtrW, GetWindowTextW, LoadCursorW,
                 PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
                 SetWindowLongPtrW, SetWindowTextW, TrackPopupMenu, TranslateMessage,
-                CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBN_SELCHANGE,
+                CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBN_CLOSEUP,
+                CBN_SELCHANGE,
                 CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDYES,
                 MB_ICONQUESTION, MB_YESNO, MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING, MSG, MessageBoxW, SM_CXVIRTUALSCREEN,
                 SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWNORMAL,
@@ -694,7 +695,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_COMMAND => {
             // No child BUTTON controls exist anymore (owner-drawn); with
             // TPM_RETURNCMD the popup menu returns directly (see popup_menu).
-            // The only WM_COMMAND traffic is CBN_SELCHANGE from the dropdowns.
+            // The only WM_COMMAND traffic is CBN_SELCHANGE/CBN_CLOSEUP from the
+            // dropdowns (real child HWNDs). They steal keyboard focus on use,
+            // which would silently break overlay keys (Esc/Ctrl+C) afterwards,
+            // so focus always returns to the overlay itself.
             if lp.0 != 0 {
                 let code = ((wp.0 >> 16) & 0xffff) as u32;
                 if code == CBN_SELCHANGE {
@@ -710,6 +714,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         if let Some(l) = st.tgt_items.get(i) {
                             st.tgt = l.clone();
                         }
+                    }
+                    unsafe {
+                        SetFocus(Some(st.hwnd));
+                    }
+                } else if code == CBN_CLOSEUP {
+                    unsafe {
+                        SetFocus(Some(st.hwnd));
                     }
                 }
             }
@@ -1173,13 +1184,17 @@ fn start_download(st: &mut State, legs: Vec<String>, label: String) {
 
 /// R1: right-click with no (or empty) selection first selects the whole box
 /// under the cursor, so the menu always acts on something when possible.
+/// Must select ((li,0),(li,n)) like a tap: an empty caret range paints zero
+/// strips (no blue box), toasts nothing, and leaves the menu grayed.
 fn autoselect_at(st: &mut State, p: (i32, i32)) {
     let has_text = st.sel.map(|r| !range_text(st, r).trim().is_empty()).unwrap_or(false);
     if has_text {
         return;
     }
     if let Some(li) = line_at_point(st, p) {
-        st.sel = Some(((li, 0), (li, 0)));
+        let n = st.lines[li].chars.len();
+        st.sel = Some(((li, 0), (li, n)));
+        set_title(st, &format!("Selectable — 已选中 {} 字", count_chars(st)));
         invalidate(st);
     }
 }
@@ -1959,6 +1974,75 @@ mod tests {
         assert_eq!(range_text(&st, ((0, 1), (0, 3))), "bc");
         assert_eq!(range_text(&st, ((0, 2), (1, 2))), "cd\n截屏");
         assert_eq!(range_text(&st, ((1, 0), (1, 1))), "截");
+    }
+
+    #[test]
+    fn r1_autoselect_takes_whole_box() {
+        // Regression: autoselect_at used to set an empty caret ((li,0),(li,0))
+        // which paints zero strips (no blue box) and leaves the menu grayed.
+        let mut st = toy_state();
+        st.lines = vec![toy_line("abcd")];
+        autoselect_at(&mut st, (50, 10));
+        assert_eq!(st.sel, Some(((0, 0), (0, 4))));
+        assert_eq!(selected_text(&st), "abcd");
+        // Existing non-empty selection is left alone (even off-box clicks).
+        autoselect_at(&mut st, (500, 500));
+        assert_eq!(st.sel, Some(((0, 0), (0, 4))));
+        // Empty caret upgrades to the whole box.
+        st.sel = Some(((0, 2), (0, 2)));
+        autoselect_at(&mut st, (50, 10));
+        assert_eq!(selected_text(&st), "abcd");
+    }
+
+    #[test]
+    fn selection_paints_blue_box() {
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, FillRect, GetDC,
+            SelectObject,
+        };
+        unsafe {
+            let screen = GetDC(Some(NULL_HWND));
+            let mem = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, 400, 300);
+            let old = SelectObject(mem, bmp.into());
+            let white = CreateSolidBrush(COLORREF(0xFFFFFF));
+            let rc = RECT { left: 0, top: 0, right: 400, bottom: 300 };
+            FillRect(mem, &rc, white);
+            let _ = DeleteObject(white.into());
+
+            // Selection blue 0xAD4600 is 0xBBGGRR: B173 G70 R0.
+            let mut st = toy_state();
+            st.lines = vec![toy_line("abcd")];
+            st.sel = Some(((0, 0), (0, 4)));
+            paint_selection(mem, &mut st);
+
+            let (buf, img) = readback_400x300(mem, bmp);
+            let _ = img.save("temp/selection.png");
+            // Toy quad is (0,0,100,20): blue must exist inside, white outside.
+            let (mut blue_in, mut blue_out) = (0, 0);
+            for y in 0..300 {
+                for x in 0..400 {
+                    let o = (y * 400 + x) * 4;
+                    let (b, g, r) = (buf[o], buf[o + 1], buf[o + 2]);
+                    let is_blue = b > 100 && g < 120 && r < 60;
+                    if !is_blue {
+                        continue;
+                    }
+                    if x < 100 && y < 20 {
+                        blue_in += 1;
+                    } else {
+                        blue_out += 1;
+                    }
+                }
+            }
+            eprintln!("selection pixels: blue_in={blue_in} blue_out={blue_out}");
+            assert!(blue_in > 500, "selection box did not paint blue");
+            assert!(blue_out == 0, "selection leaked outside its box");
+            SelectObject(mem, old);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mem);
+            let _ = windows::Win32::Graphics::Gdi::ReleaseDC(Some(NULL_HWND), screen);
+        }
     }
     #[test]
     fn dropdown_derives_from_full_registry_table() {
