@@ -1828,7 +1828,7 @@ fn popup_menu(st: &mut State) {
             let _ = AppendMenuW(menu, menu_flags(!st.lines.is_empty()), M_TRANSLATE_ALL, w!("翻译全部文本"));
         }
         let _ = AppendMenuW(menu, MF_STRING, M_SAVE, w!("保存截图"));
-        let _ = AppendMenuW(menu, MF_STRING, M_SAVE_AS, w!("另存为…"));
+        let _ = AppendMenuW(menu, MF_STRING, M_SAVE_AS, w!("截图另存为…"));
         let _ = AppendMenuW(menu, MF_STRING, M_ABOUT, w!("关于"));
         let _ = AppendMenuW(menu, MF_STRING, M_CLOSE, w!("关闭"));
         let mut pt = POINT { x: 0, y: 0 };
