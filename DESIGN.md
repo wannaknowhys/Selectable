@@ -267,10 +267,14 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
 
 ### 12.8 Language dropdowns (escape hatch, decided)
 
-- The overlay translate row becomes `[source dropdown][target dropdown][Translate]`:
-  source defaults to `Auto (detected: xx)`, target to the system locale; both are
-  standard Win32 COMBOBOX children (`CBS_DROPDOWNLIST`, native look + keyboard),
-  options = union of registry-available directions.
+- The overlay bottom row is now `[save][source dropdown][target dropdown]
+  [Translate selection][Translate]`: source defaults to `Auto (detected: xx)`,
+  target to the system locale; both dropdowns are standard Win32 COMBOBOX
+  children (`CBS_DROPDOWNLIST`, native look + keyboard), options = union of
+  registry-available directions. `Translate selection` runs the refined
+  partial scope, `Translate` the full scope; both read `Cancel translation`
+  while busy. The context menu mirrors them (`Translate selected text` /
+  `Translate all text`, both cancel while busy).
 - Changing either re-runs the §12.3 resolve (translate if local, else
   download/unsupported toast); manual choice wins over auto-detect for this
   overlay session (config file untouched).
@@ -286,9 +290,9 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
 7. THIRD-PARTY-NOTICES + About + docs.
 8. CI YAML: tag releases, 6 zips + SHA256SUMS.
 9. Pixel-level verification (partly done: dropdowns/`ja` pick, translate button,
-  full Chinese subtitles over boxes, pivot confirm with both legs + 99MB, jaen
-  chain download on disk; left: download-panel shot, subtitle close-up,
-  right-click menu). Live-session method: run the overlay foreground via
+  full/partial Chinese subtitles over boxes, pivot confirm with both legs +
+  99MB, jaen chain download on disk, right-click menu items + R1 enabled
+  state; renames and the download panel are covered by offscreen GDI tests). Live-session method: run the overlay foreground via
   `agy-run` (`lpDesktop = WinSta0\Default`) into the interactive desktop,
   `SELECTABLE_DEBUG=1` logs exact coords to `clicks.log`; under dual screens
   computer-use lands at half the sent X (right half unreachable) — send `2P`
@@ -301,8 +305,12 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   menu; cursor over no box keeps old behavior (grayed items).
 - **R2 subtitles over selection**: paint order becomes translated subtitles >
   blue-background selection (it was reversed — selection covered subtitles).
-  Subtitles paint as whole regions: partial = one region over the selection
-  bounds, full = one region per macro-block, `DT_WORDBREAK` wrapping.
+  Subtitles paint as whole regions: partial = one region per macro-block
+  intersecting the selection (select-all converges to the full layout; a
+  single bounding-box blob smears whole screens and drives the model into
+  repetition loops on long garbage input), full = one region per macro-block,
+  `DT_WORDBREAK` wrapping; degenerate quads with empty intersection fall back
+  to the single box.
 - **R3 mixed text excludes the target**: count scripts in the probe text,
   candidates = all − target, most frequent wins; all-target text reports
   "nothing to translate". Probe text: partial = joined selection,

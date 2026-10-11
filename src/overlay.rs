@@ -79,6 +79,7 @@ const M_SAVE_AS: usize = 2006;
 const M_CLOSE: usize = 2007;
 const M_ABOUT: usize = 2008;
 const M_SELECT_ALL: usize = 2009;
+const M_TRANSLATE_ALL: usize = 2010;
 const TICK_MS: u32 = 50;
 const TIMER_TICK: usize = 1;
 const TIMER_CLOSE: usize = 2;
@@ -224,6 +225,7 @@ struct State {
     translating: bool,
     pending: Option<PendingT>, // waiting on the translate worker
     btn_save: (i32, i32, i32, i32),
+    btn_tr_sel: (i32, i32, i32, i32),
     btn_tr: (i32, i32, i32, i32),
     combo_src_r: (i32, i32, i32, i32),
     combo_tgt_r: (i32, i32, i32, i32),
@@ -345,6 +347,7 @@ fn show_overlay_inner(
             translating: false,
             pending: None,
             btn_save: (0, 0, 0, 0),
+            btn_tr_sel: (0, 0, 0, 0),
             btn_tr: (0, 0, 0, 0),
             combo_src_r: (0, 0, 0, 0),
             combo_tgt_r: (0, 0, 0, 0),
@@ -434,20 +437,20 @@ fn layout_buttons(st: &mut State) {
     const CBW: i32 = 110;
     const BH: i32 = 44;
     const GAP: i32 = 12;
-    // Row on the focus (cursor) monitor: [save][src][tgt][translate].
-    let total = BW + CBW * 2 + BW + GAP * 3;
+    // Row on the focus (cursor) monitor: [save][src][tgt][tr-sel][tr-full].
+    let total = BW * 3 + CBW * 2 + GAP * 4;
     let x0 = st.focus.cx() - total / 2;
     let mut y = st.focus.t + 24;
+    let x1 = x0 + BW;
+    let x2 = x1 + GAP + CBW;
+    let x3 = x2 + GAP + CBW;
+    let x4 = x3 + GAP + BW;
     let mut rects = [
-        (x0, y, x0 + BW, y + BH),
-        (x0 + BW + GAP, y, x0 + BW + GAP + CBW, y + BH),
-        (x0 + BW + GAP + CBW + GAP, y, x0 + BW + GAP * 2 + CBW * 2, y + BH),
-        (
-            x0 + BW + GAP * 2 + CBW * 2 + GAP,
-            y,
-            x0 + total,
-            y + BH,
-        ),
+        (x0, y, x1, y + BH),
+        (x1 + GAP, y, x2, y + BH),
+        (x2 + GAP, y, x3, y + BH),
+        (x3 + GAP, y, x4, y + BH),
+        (x4 + GAP, y, x0 + total, y + BH),
     ];
     // Auto-avoid: if any OCR box overlaps the row, move it near the bottom
     // of the same monitor.
@@ -469,7 +472,8 @@ fn layout_buttons(st: &mut State) {
     st.btn_save = rects[0];
     st.combo_src_r = rects[1];
     st.combo_tgt_r = rects[2];
-    st.btn_tr = rects[3];
+    st.btn_tr_sel = rects[3];
+    st.btn_tr = rects[4];
     place_combos(st);
 }
 
@@ -583,8 +587,6 @@ fn translate_button(st: &mut State) {
     }
 }
 
-/// Context-menu "翻译选中": partial overlay of the current selection.
-
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
         let cs = &*(lp.0 as *const windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW);
@@ -616,6 +618,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             } else if in_rect(p, st.btn_save) {
                 dlog(format!("down save {p:?}"));
                 do_quick_save(st);
+            } else if in_rect(p, st.btn_tr_sel) {
+                dlog(format!("down translate-sel {p:?}"));
+                if tr_busy(st) {
+                    cancel_translation(st);
+                } else {
+                    translate_menu(st);
+                }
             } else if in_rect(p, st.btn_tr) {
                 dlog(format!("down translate {p:?}"));
                 translate_button(st);
@@ -784,7 +793,7 @@ fn on_tick(st: &mut State, id: usize) {
                 st.tier = rep.tier;
                 st.ready = true;
                 layout_buttons(st);
-                let mut info = format!("ready lines={} save={:?} tr={:?}", st.lines.len(), st.btn_save, st.btn_tr);
+                let mut info = format!("ready lines={} save={:?} tr_sel={:?} tr={:?}", st.lines.len(), st.btn_save, st.btn_tr_sel, st.btn_tr);
                 for (i, l) in st.lines.iter().enumerate() {
                     let (x0, y0, x1, y1) = l.quad.axis_aligned_bounds();
                     info.push_str(&format!(" | {i}:({x0},{y0},{x1},{y1})[{:.2}]{}", l.score, preview(&l.text, 40)));
@@ -1044,8 +1053,11 @@ fn resolve_plan(st: &State, text: &str) -> Result<(String, String, Vec<String>),
     }
 }
 
-/// Region payload for a scope (R4): Partial = selection bounds as one region,
-/// Full = one region per macro-block (clustered + newline-restored).
+/// Region payload for a scope (R4): Partial = macro-blocks intersecting the
+/// selection (one region each), Full = one region per macro-block.
+/// Refined partial converges to full layout on select-all (each block keeps
+/// its own context and shape) instead of one bounding-box blob that smears
+/// whole screens and chokes the model into repetition loops.
 fn build_regions(st: &State, mode: TMode) -> Vec<RegionJob> {
     match mode {
         TMode::Partial => {
@@ -1059,20 +1071,35 @@ fn build_regions(st: &State, mode: TMode) -> Vec<RegionJob> {
             let (a, b) = (l0.min(n - 1), l1.min(n - 1));
             let (mut x0, mut y0, mut x1, mut y1) =
                 (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-            let mut hmax = 0u32;
             for li in a..=b {
                 let (lx0, ly0, lx1, ly1) = st.lines[li].quad.axis_aligned_bounds();
                 x0 = x0.min(lx0 as i32);
                 y0 = y0.min(ly0 as i32);
                 x1 = x1.max(lx1 as i32);
                 y1 = y1.max(ly1 as i32);
-                hmax = hmax.max(ly1.saturating_sub(ly0));
             }
-            vec![RegionJob {
-                rect: (x0, y0, x1, y1),
-                font_px: hmax.saturating_sub(4).max(12),
-                text,
-            }]
+            let sel_box = (x0, y0, x1, y1);
+            let refined: Vec<RegionJob> = cluster_blocks(&st.lines)
+                .into_iter()
+                .filter(|blk| !blk.text.trim().is_empty() && rects_overlap(blk.rect, sel_box))
+                .map(|blk| RegionJob { rect: blk.rect, font_px: blk.font_px, text: blk.text })
+                .collect();
+            if refined.is_empty() {
+                // Degenerate quads (zero area) intersect nothing: fall back to
+                // the old single bounding-box blob so real selections still go.
+                let mut hmax = 0u32;
+                for li in a..=b {
+                    let (_, ly0, _, ly1) = st.lines[li].quad.axis_aligned_bounds();
+                    hmax = hmax.max(ly1.saturating_sub(ly0));
+                }
+                vec![RegionJob {
+                    rect: sel_box,
+                    font_px: hmax.saturating_sub(4).max(12),
+                    text,
+                }]
+            } else {
+                refined
+            }
         }
         _ => cluster_blocks(&st.lines)
             .into_iter()
@@ -1080,6 +1107,11 @@ fn build_regions(st: &State, mode: TMode) -> Vec<RegionJob> {
             .map(|b| RegionJob { rect: b.rect, font_px: b.font_px, text: b.text })
             .collect(),
     }
+}
+
+/// Strict-area AABB overlap (touching edges don't count).
+fn rects_overlap(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> bool {
+    a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
 }
 
 /// Entry: translate scope in mode. Downloads models first when missing —
@@ -1099,8 +1131,13 @@ fn start_translate(st: &mut State, mode: TMode) {
         show_toast(st, "先选中要翻译的文字".to_string());
         return;
     }
-    // Probe the longest region (R4): a single first box misjudges mixed screens.
-    let probe = regions.iter().max_by_key(|r| r.text.len()).map(|r| r.text.clone()).unwrap_or_default();
+    // Probe (R3/R4): partial probes the raw selection concat (the refined
+    // regions may span several blocks and misjudge mixed screens); full
+    // probes the longest macro-block.
+    let probe = match mode {
+        TMode::Partial => selected_text(st),
+        _ => regions.iter().max_by_key(|r| r.text.len()).map(|r| r.text.clone()).unwrap_or_default(),
+    };
     let (src, tgt, legs) = match resolve_plan(st, &probe) {
         Ok(v) => v,
         Err(e) if e == "UNSUPPORTED" => {
@@ -1230,7 +1267,7 @@ fn autoselect_at(st: &mut State, p: (i32, i32)) {
     }
 }
 
-/// Context-menu "翻译选中": partial overlay of the current selection.
+/// Context-menu "翻译选中文本": partial overlay of the current selection.
 fn translate_menu(st: &mut State) {
     if selected_text(st).is_empty() {
         show_toast(st, "先选中要翻译的文字".to_string());
@@ -1425,6 +1462,7 @@ fn paint(st: &mut State) {
             let _ = DeleteObject(dot.into());
             // Buttons.
             paint_button(hdc, st, st.btn_save, "保存");
+            paint_button(hdc, st, st.btn_tr_sel, if tr_busy(st) { "取消翻译" } else { "翻译选中" });
             paint_button(hdc, st, st.btn_tr, if tr_busy(st) { "取消翻译" } else { "翻译" });
         } else {
             // Spinner while the worker runs.
@@ -1718,10 +1756,12 @@ fn popup_menu(st: &mut State) {
         let _ = AppendMenuW(menu, menu_flags(!st.lines.is_empty()), M_SELECT_ALL, w!("全选"));
         let _ = AppendMenuW(menu, menu_flags(has_sel), M_SEARCH, w!("浏览器搜索"));
         if tr_busy(st) {
-            // Cancel needs no selection: always enabled.
+            // Cancel needs no selection: both rows cancel, always enabled.
             let _ = AppendMenuW(menu, MF_STRING, M_TRANSLATE, w!("取消翻译"));
+            let _ = AppendMenuW(menu, MF_STRING, M_TRANSLATE_ALL, w!("取消翻译"));
         } else {
-            let _ = AppendMenuW(menu, menu_flags(has_sel), M_TRANSLATE, w!("翻译选中"));
+            let _ = AppendMenuW(menu, menu_flags(has_sel), M_TRANSLATE, w!("翻译选中文本"));
+            let _ = AppendMenuW(menu, menu_flags(!st.lines.is_empty()), M_TRANSLATE_ALL, w!("翻译全部文本"));
         }
         let _ = AppendMenuW(menu, MF_STRING, M_SAVE, w!("保存截图"));
         let _ = AppendMenuW(menu, MF_STRING, M_SAVE_AS, w!("另存为…"));
@@ -1755,6 +1795,13 @@ fn popup_menu(st: &mut State) {
                     cancel_translation(st);
                 } else {
                     translate_menu(st);
+                }
+            }
+            M_TRANSLATE_ALL => {
+                if tr_busy(st) {
+                    cancel_translation(st);
+                } else {
+                    translate_full(st);
                 }
             }
             M_SAVE => do_quick_save(st),
@@ -2000,7 +2047,7 @@ mod tests {
             src_sel: SrcSel::Auto, tgt: String::new(),
             src_cfg: String::new(), tgt_cfg: String::new(),
             tworker: None, dl: None,
-            btn_save: (0, 0, 0, 0), btn_tr: (0, 0, 0, 0),
+            btn_save: (0, 0, 0, 0), btn_tr_sel: (0, 0, 0, 0), btn_tr: (0, 0, 0, 0),
             combo_src_r: (0, 0, 0, 0), combo_tgt_r: (0, 0, 0, 0),
             ox: 0, oy: 0, mouse: (0, 0),
             mons: vec![crate::monitors::Mon { l: 0, t: 0, r: 1920, b: 1080, primary: true }],
@@ -2011,9 +2058,13 @@ mod tests {
     }
 
     fn toy_line(text: &str) -> OcrLine {
+        toy_line_at(text, 0.0)
+    }
+
+    fn toy_line_at(text: &str, y0: f32) -> OcrLine {
         let n = text.chars().count().max(1) as f32;
         OcrLine {
-            quad: crate::geometry::Quad::from_xyxy(0.0, 0.0, 100.0, 20.0),
+            quad: crate::geometry::Quad::from_xyxy(0.0, y0, 100.0, y0 + 20.0),
             text: text.to_string(),
             score: 1.0,
             chars: text
@@ -2066,6 +2117,32 @@ mod tests {
         st.lines.clear();
         select_all(&mut st);
         assert!(st.sel.is_none());
+    }
+
+    #[test]
+    fn rects_overlap_needs_area() {
+        assert!(rects_overlap((0, 0, 10, 10), (5, 5, 15, 15)));
+        assert!(!rects_overlap((0, 0, 10, 10), (10, 0, 20, 10)), "edge touch");
+        assert!(!rects_overlap((0, 0, 10, 10), (20, 20, 30, 30)));
+    }
+
+    #[test]
+    fn partial_regions_follow_blocks() {
+        // Refined partial: select-all converges to the full layout (one
+        // region per intersected block), single-box keeps one region.
+        let mut st = toy_state();
+        st.lines = vec![toy_line_at("hello", 0.0), toy_line_at("world", 100.0)];
+        st.sel = Some(((0, 0), (1, 5)));
+        let partial = build_regions(&st, TMode::Partial);
+        let full = build_regions(&st, TMode::Full);
+        assert_eq!(partial.len(), 2);
+        assert_eq!(full.len(), 2);
+        assert_eq!(partial[0].text, full[0].text);
+        assert_eq!(partial[1].text, full[1].text);
+        st.sel = Some(((0, 0), (0, 5)));
+        let one = build_regions(&st, TMode::Partial);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].text, "hello");
     }
 
     #[test]

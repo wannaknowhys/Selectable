@@ -261,9 +261,12 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
 
 ### 12.8 语种下拉框（逃生通道，已定）
 
-- Overlay 翻译行扩展为 `[源下拉][目标下拉][翻译]`：源默认 `Auto（本次判定：xx）`，
-  目标默认系统 locale；两个都是标准 Win32 COMBOBOX 子窗口（`CBS_DROPDOWNLIST`，
-  原生外观键盘可用，比自绘省事），选项= registry 实际存在的方向并集。
+- Overlay 底部行现为 `[保存][源下拉][目标下拉][翻译选中][翻译]`：源默认
+  `Auto（本次判定：xx）`，目标默认系统 locale；两个下拉都是标准 Win32
+  COMBOBOX 子窗口（`CBS_DROPDOWNLIST`，原生外观键盘可用，比自绘省事），
+  选项= registry 实际存在的方向并集。`翻译选中`走选中区（ refined partial），
+  `翻译`走全文；忙时两键同变`取消翻译`。右键菜单对应两项
+  `翻译选中文本`/`翻译全部文本`，忙时同变取消。
 - 任一下拉改动 → 重走 §12.3 resolve（本地有则直接翻，没有则下载/报不支持）；
   与自动判定冲突时手动选择优先，本次 Overlay 有效（config 不自动改写）。
 
@@ -276,9 +279,9 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
 6. 工作线程翻译 + 状态机激活 + 语种下拉框 UI（覆盖渲染已就绪）。
 7. THIRD-PARTY-NOTICES + About + 文档。
 8. CI YAML：tag 触发，6 包 + SHA256SUMS。
-9. 像素级验证（已部分完成：下拉框/`ja` 选中、翻译按钮、全文中文字幕压框、
-  pivot 确认框两段+99MB、jaen 链式下载落盘；待补：下载面板截图、字幕压选中
-  特写、右键菜单）。真机会话方法：overlay 经 `agy-run`（`lpDesktop =
+9. 像素级验证（已部分完成：下拉框/`ja` 选中、翻译按钮、全文/部分中文字幕压框、
+  pivot 确认框两段+99MB、jaen 链式下载落盘、右键菜单 7 项+R1 非灰；菜单改名
+  与下载面板走离屏 GDI 单测覆盖）。真机会话方法：overlay 经 `agy-run`（`lpDesktop =
   WinSta0\Default`）前台跑进交互桌面，`SELECTABLE_DEBUG=1` 写 `clicks.log`
   给精确坐标；computer-use 在双屏下落点恒为发送 X 的一半（右半屏不可达），
   点物理 P 发 `2P`，模态框用键盘（Enter/Esc/方向键）。
@@ -289,7 +292,9 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
   文本框整框选中，再弹菜单；光标不在任何框上则保持原样（菜单项置灰）。
 - **R2 字幕压住选中**：绘制顺序改为 翻译字幕 > 蓝底白字选中
   （原顺序画反了，选中盖住了字幕）。字幕按区域整块盖：
-  partial=选中包围盒一个区，full=每宏块一个区，`DT_WORDBREAK` 自动折行。
+  partial=与选中相交的宏块逐个区（全选即收敛到全文布局，单包围盒糊整屏、
+  长垃圾输入还会把模型带进复读循环），full=每宏块一个区，
+  `DT_WORDBREAK` 自动折行；退化四边形交集为空时退回单包围盒。
 - **R3 混合文本排除目标语言**：对探测文本计各语种字数，候选=全部−目标，
   取数量最多的；若全是目标语则报"无需翻译"。探测文本：
   partial=选中拼接，full=取最长宏块（单 job 单 pair，混语屏以主体为准）。
