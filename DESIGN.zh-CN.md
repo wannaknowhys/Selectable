@@ -332,11 +332,12 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
   `search-config-v2.json`（155 引擎：全局默认 google、zh-CN 默认 baidu，
   合作方标记已剔除；  wikipedia 上游只有 en，zh 子域系派生），显式
   `engine_url` 始终优先。
-- **翻译 source 单开关（决议，未实现）**：`[translate] source =
-  bergamot|online|external`（默认 bergamot）是唯一分发点；regions/probe/
-  (src,tgt) 只 resolve 一次，三个 executor 吃同一套输入（状态机不动）。
-  external 落地时 URL 模板加 `{tgt}`（Bergamot 码转 BCP47：zh→zh-CN 等，
-  旧模板无 `{tgt}` 不受影响）；online 涉及选型+key+隐私，另议。
+- **翻译 source 单开关（已落地 bergamot/external；online 待定）**：
+  `[translate] source = bergamot|online|external`（默认 bergamot）是唯一分发点；
+  regions/probe/(src,tgt) 只 resolve 一次，三个 executor 吃同一套输入（状态机
+  不动）。external：跳过本地引擎，partial 取选中、full 取全文直开 URL，
+  模板 `{tgt}` 按 BCP47 填充（zh→zh-CN 等），走 external_auto_exit；
+  online：未接线，设了会 toast 回退本地。online 涉及选型+key+隐私，另议。
 - **Esc 分级**：有翻译（含在翻）→取消翻译；无翻译有选中→清选中；都没有→
   关窗。每级都顺手清 toast。
 - **右键菜单全选**：`全选` 项选中全部 OCR 行（空屏则不选），之后复制/翻译/

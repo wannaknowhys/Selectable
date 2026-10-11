@@ -101,6 +101,7 @@ mod tests {
             use_directml: false,
             search_url: String::new(),
             translate_url: String::new(),
+            translate_mode: "bergamot".to_string(),
             external_auto_exit: true,
             translate_source: "auto".to_string(),
             translate_target: "auto".to_string(),

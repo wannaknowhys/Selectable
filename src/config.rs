@@ -35,7 +35,10 @@ fn default_combos() -> Vec<String> {
     vec!["Shift+PrintScreen".to_string()]
 }
 
-#[derive(Debug, Deserialize, Default)]
+/// NOTE: manual Default (not derive): derive would fill custom-defaulted
+/// fields (cascade/batch/directml) with empty/zero/false whenever the whole
+/// [ocr] section is absent from config.toml, silently bricking OCR startup.
+#[derive(Debug, Deserialize)]
 struct OcrSection {
     #[serde(default)]
     model: Option<String>,
@@ -45,6 +48,17 @@ struct OcrSection {
     rec_batch_size: usize,
     #[serde(default = "default_true")]
     use_directml: bool,
+}
+
+impl Default for OcrSection {
+    fn default() -> Self {
+        Self {
+            model: None,
+            cascade: default_cascade(),
+            rec_batch_size: default_batch(),
+            use_directml: true,
+        }
+    }
 }
 
 fn default_cascade() -> Vec<String> {
@@ -84,6 +98,10 @@ fn default_search_url() -> String {
 
 #[derive(Debug, Deserialize)]
 struct TranslateSection {
+    /// Engine switch (single dispatch): bergamot (offline, default) |
+    /// external (always browser) | online (not wired yet; falls back).
+    #[serde(default = "default_source_mode")]
+    source: String,
     #[serde(default = "default_translate_url")]
     external_url: String,
     /// Exit the overlay after any external browser launch (search + the
@@ -102,6 +120,7 @@ struct TranslateSection {
 impl Default for TranslateSection {
     fn default() -> Self {
         Self {
+            source: default_source_mode(),
             external_url: default_translate_url(),
             external_auto_exit: true,
             source_lang: default_auto(),
@@ -110,12 +129,26 @@ impl Default for TranslateSection {
     }
 }
 
+/// Normalized engine name; unknown values (typos) fall back to bergamot so a
+/// bad key can't brick startup.
+pub fn normalize_source_mode(raw: &str) -> &'static str {
+    match raw.trim().to_lowercase().as_str() {
+        "external" => "external",
+        "online" => "online",
+        _ => "bergamot",
+    }
+}
+
+fn default_source_mode() -> String {
+    "bergamot".to_string()
+}
+
 fn default_auto() -> String {
     "auto".to_string()
 }
 
 fn default_translate_url() -> String {
-    "https://translate.google.com/?sl=auto&tl=zh-CN&text={text}".to_string()
+    "https://translate.google.com/?sl=auto&tl={tgt}&text={text}".to_string()
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -135,6 +168,7 @@ pub struct AppConfig {
     pub use_directml: bool,
     pub search_url: String,
     pub translate_url: String,
+    pub translate_mode: String,
     pub external_auto_exit: bool,
     pub translate_source: String,
     pub translate_target: String,
@@ -162,6 +196,7 @@ impl AppConfig {
                         &fc.search.engine,
                     ),
                     translate_url: fc.translate.external_url,
+                    translate_mode: normalize_source_mode(&fc.translate.source).to_string(),
                     external_auto_exit: fc.translate.external_auto_exit,
                     translate_source: fc.translate.source_lang,
                     translate_target: fc.translate.target_lang,
@@ -177,10 +212,41 @@ impl AppConfig {
             use_directml: true,
             search_url: default_search_url(),
             translate_url: default_translate_url(),
+            translate_mode: default_source_mode(),
             external_auto_exit: true,
             translate_source: default_auto(),
             translate_target: default_auto(),
             save_dir: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_mode_normalizes() {
+        assert_eq!(normalize_source_mode("bergamot"), "bergamot");
+        assert_eq!(normalize_source_mode(" External "), "external");
+        assert_eq!(normalize_source_mode("ONLINE"), "online");
+        // Default + typos fall back to bergamot (never brick startup).
+        assert_eq!(normalize_source_mode(""), "bergamot");
+        assert_eq!(normalize_source_mode("extrenal"), "bergamot");
+    }
+
+    #[test]
+    fn partial_config_keeps_section_defaults() {
+        // Regression: a config.toml with only [translate] used to leave
+        // OcrSection::default() derived (empty cascade), bricking OCR with
+        // `tried []`. Missing sections must equal their manual defaults.
+        let fc: FileConfig = toml::from_str("[translate]\nsource = \"external\"\n").unwrap();
+        assert_eq!(normalize_source_mode(&fc.translate.source), "external");
+        assert_eq!(
+            fc.ocr.cascade,
+            vec!["medium".to_string(), "small".to_string(), "tiny".to_string()]
+        );
+        assert_eq!(fc.search.engine, "bing");
+        assert!(fc.search.engine_url.is_none());
     }
 }

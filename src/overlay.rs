@@ -91,6 +91,7 @@ pub struct OverlayRequest {
     pub active_title: String,
     pub search_url: String,
     pub translate_url: String,
+    pub translate_mode: String,
     pub external_auto_exit: bool,
     pub translate_source: String,
     pub translate_target: String,
@@ -201,6 +202,7 @@ struct State {
     search_url: String,
     // Phase: Bergamot engine wiring.
     translate_url: String,
+    translate_mode: String,
     external_auto_exit: bool,
     save_dir: Option<String>,
     hwnd: HWND,
@@ -326,6 +328,7 @@ fn show_overlay_inner(
             title: req.active_title,
             search_url: req.search_url,
             translate_url: req.translate_url,
+            translate_mode: req.translate_mode,
             external_auto_exit: req.external_auto_exit,
             save_dir: req.save_dir,
             hwnd: NULL_HWND,
@@ -1217,6 +1220,20 @@ fn start_translate(st: &mut State, mode: TMode) {
             return;
         }
     };
+    // Engine switch (single dispatch): external skips the local engine and
+    // opens the translator URL; online is not wired yet and rides bergamot
+    // with a notice; anything else is bergamot.
+    if st.translate_mode == "external" {
+        let text = match mode {
+            TMode::Partial => selected_text(st),
+            _ => all_text(st),
+        };
+        external_translate(st, &text, &tgt);
+        return;
+    }
+    if st.translate_mode == "online" {
+        show_toast(st, "online 翻译未接入，已回退本地引擎".to_string());
+    }
     let label = legs.join("+");
     dlog(format!("start_translate legs={label} src={src} tgt={tgt}"));
     let pending = PendingT { regions, mode, chain: legs.clone() };
@@ -2049,6 +2066,29 @@ fn fill_url(template: &str, text: &str) -> String {
     template.replace("{text}", &url_encode(text))
 }
 
+/// Bergamot pair code to a BCP47 tag for external translator URLs
+/// (Google wants zh-CN, not zh).
+fn external_lang_tag(code: &str) -> &str {
+    match code.trim().to_lowercase().as_str() {
+        "zh" => "zh-CN",
+        "zh_hant" => "zh-TW",
+        _ => code,
+    }
+}
+
+/// External mode: skip the local engine entirely and open the translator
+/// URL for the scope text (partial = selection, full = everything). The
+/// default template carries {tgt}; auto-exit applies like every external open.
+fn external_translate(st: &mut State, text: &str, tgt: &str) {
+    if text.trim().is_empty() {
+        show_toast(st, "先选中要翻译的文字".to_string());
+        return;
+    }
+    let url = fill_url(&st.translate_url, text).replace("{tgt}", external_lang_tag(tgt));
+    // Borrow ends here (owned String); open_external takes &mut.
+    open_external(st, &url, "已在浏览器中打开翻译");
+}
+
 fn open_url(url: &str) -> bool {
     unsafe {
         let u = HSTRING::from(url);
@@ -2099,8 +2139,8 @@ mod tests {
     fn toy_state() -> State {
         State {
             bgra: Vec::new(), w: 0, h: 0, title: String::new(),
-            search_url: String::new(), translate_url: String::new(), external_auto_exit: true,
-            save_dir: None,
+            search_url: String::new(), translate_url: String::new(), translate_mode: "bergamot".to_string(),
+            external_auto_exit: true, save_dir: None,
             hwnd: NULL_HWND, rx: std::ptr::null(),
             ready: false, load_error: None, lines: Vec::new(), tier: String::new(),
             spinner: 0, sel: None, press_at: None, anchor: None, cursor: None,
@@ -2203,6 +2243,14 @@ mod tests {
         st.translated = Some(Translated { regions: Vec::new() });
         st.tmode = TMode::Partial;
         assert_eq!(esc_action(&st), EscAction::CancelTranslation);
+    }
+
+    #[test]
+    fn external_tags_map_to_bcp47() {
+        assert_eq!(external_lang_tag("zh"), "zh-CN");
+        assert_eq!(external_lang_tag("zh_hant"), "zh-TW");
+        assert_eq!(external_lang_tag("en"), "en");
+        assert_eq!(external_lang_tag("ja"), "ja");
     }
 
     #[test]

@@ -88,6 +88,7 @@ pub(crate) fn capture_and_show(
         active_title: title,
         search_url: cfg.search_url.clone(),
         translate_url: cfg.translate_url.clone(),
+        translate_mode: cfg.translate_mode.clone(),
         external_auto_exit: cfg.external_auto_exit,
         translate_source: cfg.translate_source.clone(),
         translate_target: cfg.translate_target.clone(),

@@ -362,13 +362,14 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   `omni.ja` `search-config-v2.json` (155 engines: global default google,
   zh-CN default baidu, partner codes stripped;   upstream ships wikipedia `en`
   only, the `zh` subdomain is derived); an explicit `engine_url` always wins.
-- **Single translation-source switch (decided, not built)**: `[translate]
-  source = bergamot|online|external` (default bergamot) is the only dispatch
-  point; regions/probe/(src,tgt) resolve once and all three executors consume
-  the same input (state machine untouched). When external lands, its URL
-  template gains `{tgt}` (Bergamot code to BCP47: zh to zh-CN etc.; old
-  templates without `{tgt}` keep working); online needs provider/key/privacy
-  decisions first.
+- **Single translation-source switch (bergamot/external live; online TBD)**:
+  `[translate] source = bergamot|online|external` (default bergamot) is the
+  only dispatch point; regions/probe/(src,tgt) resolve once and all three
+  executors consume the same input (state machine untouched). external skips
+  the local engine and opens the URL directly (partial takes the selection,
+  full takes everything); `{tgt}` fills per BCP47 (zh to zh-CN etc.) and
+  external_auto_exit applies. online is unwired and falls back to local with
+  a toast; provider/key/privacy decisions come first.
 - **Staged Esc**: painted/in-flight translation → cancel it; else selection →
   clear it; else → close the window. Every stage also drops the toast.
 - **Select-all menu item**: 全选 selects every OCR line (empty screen selects

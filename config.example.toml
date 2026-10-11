@@ -10,8 +10,8 @@ combos = ["Shift+PrintScreen"]
 cascade = ["medium", "small", "tiny"]
 
 [translate]
-source = "bergamot"   # bergamot | online | external
-external_url = "https://translate.google.com/?sl=auto&tl=zh-CN&text={text}"
+source = "bergamot"   # bergamot (offline) | external (always browser) | online (not wired yet)
+external_url = "https://translate.google.com/?sl=auto&tl={tgt}&text={text}"
 # Exit the fullscreen overlay after any external browser launch (search +
 # translate fallbacks) so the just-opened browser is visible. false = stay.
 external_auto_exit = true
