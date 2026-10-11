@@ -716,11 +716,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         }
                     }
                     unsafe {
-                        SetFocus(Some(st.hwnd));
+                        let _ = SetFocus(Some(st.hwnd));
                     }
                 } else if code == CBN_CLOSEUP {
                     unsafe {
-                        SetFocus(Some(st.hwnd));
+                        let _ = SetFocus(Some(st.hwnd));
                     }
                 }
             }
