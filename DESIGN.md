@@ -305,10 +305,10 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   menu; cursor over no box keeps old behavior (grayed items).
 - **R2 subtitles over selection**: paint order becomes translated subtitles >
   blue-background selection (it was reversed — selection covered subtitles).
-  Subtitles paint as whole regions: partial = one region per macro-block
-  intersecting the selection (select-all converges to the full layout; a
-  single bounding-box blob smears whole screens and drives the model into
-  repetition loops on long garbage input), full = one region per macro-block,
+  Subtitles paint as whole regions: partial = one region per selected line
+  (rect = bbox of that line's selected strips, never larger than the blue
+  box; mid-line spans, gaps and unrelated blocks stay uncovered),
+  full = one region per macro-block,
   `DT_WORDBREAK` wrapping; degenerate quads with empty intersection fall back
   to the single box.
 - **R3 mixed text excludes the target**: count scripts in the probe text,
@@ -369,6 +369,8 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   template gains `{tgt}` (Bergamot code to BCP47: zh to zh-CN etc.; old
   templates without `{tgt}` keep working); online needs provider/key/privacy
   decisions first.
+- **Staged Esc**: painted/in-flight translation → cancel it; else selection →
+  clear it; else → close the window. Every stage also drops the toast.
 - **Select-all menu item**: 全选 selects every OCR line (empty screen selects
   nothing); copy/translate/search then act on it.
 

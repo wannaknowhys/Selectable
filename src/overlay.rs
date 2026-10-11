@@ -566,6 +566,25 @@ fn tr_busy(st: &State) -> bool {
     st.translating || st.tmode != TMode::Idle
 }
 
+/// Esc priority: cancel painted/in-flight translation first, then clear the
+/// selection, and only when neither exists close the overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EscAction {
+    CancelTranslation,
+    ClearSelection,
+    Close,
+}
+
+fn esc_action(st: &State) -> EscAction {
+    if tr_busy(st) || st.translated.is_some() {
+        EscAction::CancelTranslation
+    } else if has_selection(st) {
+        EscAction::ClearSelection
+    } else {
+        EscAction::Close
+    }
+}
+
 /// Shared cancel for the button and the menu: drop the job (a late worker
 /// reply finds pending=None and is discarded; the reply drain takes latest
 /// only, so nothing poisons the next run) and clear painted subtitles.
@@ -574,6 +593,8 @@ fn cancel_translation(st: &mut State) {
     st.pending = None;
     st.translating = false;
     st.tmode = TMode::Idle;
+    st.toast = None;
+    st.toast_level = 0xFF;
     set_title(st, "Selectable");
     invalidate(st);
 }
@@ -751,7 +772,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_KEYDOWN => {
             let vk = wp.0 as u32;
             if vk == VK_ESCAPE.0 as u32 {
-                let _ = DestroyWindow(hwnd);
+                match esc_action(st) {
+                    EscAction::CancelTranslation => cancel_translation(st),
+                    EscAction::ClearSelection => {
+                        st.sel = None;
+                        st.toast = None;
+                        st.toast_level = 0xFF;
+                        set_title(st, "Selectable");
+                        invalidate(st);
+                    }
+                    EscAction::Close => {
+                        let _ = DestroyWindow(hwnd);
+                    }
+                }
             } else if vk == 0x43 && ctrl_held() {
                 // Explicit copy only (issue #1).
                 copy_text(st, &selected_text(st));
@@ -946,6 +979,9 @@ fn norm_range(a: Option<Pos>, b: Option<Pos>) -> Option<(Pos, Pos)> {
 
 fn range_text(st: &State, r: (Pos, Pos)) -> String {
     let ((l0, c0), (l1, c1)) = r;
+    if st.lines.is_empty() {
+        return String::new();
+    }
     let mut out = Vec::new();
     for li in l0..=l1.min(st.lines.len().saturating_sub(1)) {
         let line = &st.lines[li];
@@ -1053,53 +1089,87 @@ fn resolve_plan(st: &State, text: &str) -> Result<(String, String, Vec<String>),
     }
 }
 
-/// Region payload for a scope (R4): Partial = macro-blocks intersecting the
-/// selection (one region each), Full = one region per macro-block.
-/// Refined partial converges to full layout on select-all (each block keeps
-/// its own context and shape) instead of one bounding-box blob that smears
-/// whole screens and chokes the model into repetition loops.
+/// Non-empty text selection (empty carets don't count).
+fn has_selection(st: &State) -> bool {
+    st.sel.map(|r| !range_text(st, r).trim().is_empty()).unwrap_or(false)
+}
+
+/// Per-line subtitle regions for a selection (refined partial): rect = bbox
+/// of the SELECTED strips on that line (never larger than the blue box),
+/// text = the selected slice. Mirrors paint_selection's span math so
+/// subtitles hug the selection: partial-line starts/ends, inter-line gaps
+/// and unrelated blocks stay uncovered. Full mode keeps macro-block regions.
+fn selection_regions(st: &State, r: (Pos, Pos)) -> Vec<RegionJob> {
+    let ((l0, c0), (l1, c1)) = r;
+    let mut out = Vec::new();
+    for li in l0..=l1.min(st.lines.len().saturating_sub(1)) {
+        let line = &st.lines[li];
+        if !line.quad.ordered().is_horizontal() || line.chars.is_empty() {
+            // Vertical fallback: whole box, whole text (same as blue box).
+            if line.text.trim().is_empty() {
+                continue;
+            }
+            let (x0, y0, x1, y1) = line.quad.axis_aligned_bounds();
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            let h = y1.saturating_sub(y0).max(8);
+            out.push(RegionJob {
+                rect: (x0 as i32, y0 as i32, x1 as i32, y1 as i32),
+                font_px: h.saturating_sub(2).max(12),
+                text: line.text.clone(),
+            });
+            continue;
+        }
+        let q = line.quad.ordered();
+        let (s, e) = if li == l0 && li == l1 {
+            (c0, c1)
+        } else if li == l0 {
+            (c0, line.chars.len())
+        } else if li == l1 {
+            (0, c1)
+        } else {
+            (0, line.chars.len())
+        };
+        let (s, e) = (s.min(line.chars.len()), e.min(line.chars.len()));
+        if s >= e {
+            continue;
+        }
+        let text: String = line.chars[s..e].iter().map(|c| c.text.as_str()).collect();
+        if text.trim().is_empty() {
+            continue;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) =
+            (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for c in &line.chars[s..e] {
+            let strip = q.hstrip(c.f0, c.f1);
+            for p in strip.points {
+                x0 = x0.min(p[0]);
+                y0 = y0.min(p[1]);
+                x1 = x1.max(p[0]);
+                y1 = y1.max(p[1]);
+            }
+        }
+        let (x0, y0, x1, y1) = (x0 as i32, y0 as i32, x1 as i32, y1 as i32);
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
+        let h = (y1 - y0).max(8) as u32;
+        out.push(RegionJob { rect: (x0, y0, x1, y1), font_px: h.saturating_sub(2).max(12), text });
+    }
+    out
+}
+
+/// Region payload for a scope: Partial = one region per selected line
+/// (selection_regions), Full = one region per macro-block (R4).
 fn build_regions(st: &State, mode: TMode) -> Vec<RegionJob> {
     match mode {
         TMode::Partial => {
             let Some(r) = st.sel else { return vec![] };
-            let text = range_text(st, r);
-            if text.trim().is_empty() || st.lines.is_empty() {
+            if range_text(st, r).trim().is_empty() || st.lines.is_empty() {
                 return vec![];
             }
-            let n = st.lines.len();
-            let ((l0, _), (l1, _)) = r;
-            let (a, b) = (l0.min(n - 1), l1.min(n - 1));
-            let (mut x0, mut y0, mut x1, mut y1) =
-                (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-            for li in a..=b {
-                let (lx0, ly0, lx1, ly1) = st.lines[li].quad.axis_aligned_bounds();
-                x0 = x0.min(lx0 as i32);
-                y0 = y0.min(ly0 as i32);
-                x1 = x1.max(lx1 as i32);
-                y1 = y1.max(ly1 as i32);
-            }
-            let sel_box = (x0, y0, x1, y1);
-            let refined: Vec<RegionJob> = cluster_blocks(&st.lines)
-                .into_iter()
-                .filter(|blk| !blk.text.trim().is_empty() && rects_overlap(blk.rect, sel_box))
-                .map(|blk| RegionJob { rect: blk.rect, font_px: blk.font_px, text: blk.text })
-                .collect();
-            if refined.is_empty() {
-                // Degenerate quads (zero area) intersect nothing: fall back to
-                // the old single bounding-box blob so real selections still go.
-                let mut hmax = 0u32;
-                for li in a..=b {
-                    let (_, ly0, _, ly1) = st.lines[li].quad.axis_aligned_bounds();
-                    hmax = hmax.max(ly1.saturating_sub(ly0));
-                }
-                vec![RegionJob {
-                    rect: sel_box,
-                    font_px: hmax.saturating_sub(4).max(12),
-                    text,
-                }]
-            } else {
-                refined
-            }
+            selection_regions(st, r)
         }
         _ => cluster_blocks(&st.lines)
             .into_iter()
@@ -1107,11 +1177,6 @@ fn build_regions(st: &State, mode: TMode) -> Vec<RegionJob> {
             .map(|b| RegionJob { rect: b.rect, font_px: b.font_px, text: b.text })
             .collect(),
     }
-}
-
-/// Strict-area AABB overlap (touching edges don't count).
-fn rects_overlap(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> bool {
-    a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3
 }
 
 /// Entry: translate scope in mode. Downloads models first when missing —
@@ -1255,8 +1320,7 @@ fn select_all(st: &mut State) {
 /// Must select ((li,0),(li,n)) like a tap: an empty caret range paints zero
 /// strips (no blue box), toasts nothing, and leaves the menu grayed.
 fn autoselect_at(st: &mut State, p: (i32, i32)) {
-    let has_text = st.sel.map(|r| !range_text(st, r).trim().is_empty()).unwrap_or(false);
-    if has_text {
+    if has_selection(st) {
         return;
     }
     if let Some(li) = line_at_point(st, p) {
@@ -1750,7 +1814,7 @@ fn popup_menu(st: &mut State) {
         if menu.is_invalid() {
             return;
         }
-        let has_sel = st.sel.map(|r| !range_text(st, r).is_empty()).unwrap_or(false);
+        let has_sel = has_selection(st);
         let _ = AppendMenuW(menu, menu_flags(has_sel), M_COPY_SEL, w!("复制选中文本"));
         let _ = AppendMenuW(menu, MF_STRING, M_COPY_ALL, w!("复制全部文本"));
         let _ = AppendMenuW(menu, menu_flags(!st.lines.is_empty()), M_SELECT_ALL, w!("全选"));
@@ -2120,10 +2184,57 @@ mod tests {
     }
 
     #[test]
-    fn rects_overlap_needs_area() {
-        assert!(rects_overlap((0, 0, 10, 10), (5, 5, 15, 15)));
-        assert!(!rects_overlap((0, 0, 10, 10), (10, 0, 20, 10)), "edge touch");
-        assert!(!rects_overlap((0, 0, 10, 10), (20, 20, 30, 30)));
+    fn esc_priority_chain() {
+        let mut st = toy_state();
+        // Nothing: close.
+        assert_eq!(esc_action(&st), EscAction::Close);
+        // Empty caret: still close (not a selection).
+        st.sel = Some(((0, 0), (0, 0)));
+        assert_eq!(esc_action(&st), EscAction::Close);
+        // Selection: clear it first.
+        st.lines = vec![toy_line("abcd")];
+        st.sel = Some(((0, 0), (0, 4)));
+        assert_eq!(esc_action(&st), EscAction::ClearSelection);
+        // In-flight job beats selection.
+        st.translating = true;
+        assert_eq!(esc_action(&st), EscAction::CancelTranslation);
+        st.translating = false;
+        // Painted subtitles beat selection.
+        st.translated = Some(Translated { regions: Vec::new() });
+        st.tmode = TMode::Partial;
+        assert_eq!(esc_action(&st), EscAction::CancelTranslation);
+    }
+
+    #[test]
+    fn partial_regions_hug_selection() {
+        // Subtitles never exceed the blue box: mid-line start/end across two
+        // lines yields per-line regions with sliced text; the gap stays bare.
+        let mut st = toy_state();
+        st.lines = vec![toy_line_at("abcd", 0.0), toy_line_at("efgh", 100.0)];
+        st.sel = Some(((0, 1), (1, 3)));
+        let regs = build_regions(&st, TMode::Partial);
+        assert_eq!(regs.len(), 2);
+        assert_eq!(regs[0].text, "bcd");
+        assert_eq!(regs[1].text, "efg");
+        assert_eq!((regs[0].rect.0, regs[0].rect.2), (25, 100));
+        assert_eq!((regs[1].rect.0, regs[1].rect.2), (0, 75));
+        assert!(regs[0].rect.3 <= 20, "must not reach into the gap");
+        assert!(regs[1].rect.1 >= 100, "must not reach into the gap");
+    }
+
+    #[test]
+    fn partial_splits_multiline_blocks() {
+        // Same block, different granularity: full sends one block region
+        // (context), partial sends one region per selected line (precision).
+        let mut st = toy_state();
+        st.lines = vec![toy_line_at("ab", 0.0), toy_line_at("cd", 25.0)];
+        st.sel = Some(((0, 0), (1, 2)));
+        let full = build_regions(&st, TMode::Full);
+        assert_eq!(full.len(), 1);
+        let partial = build_regions(&st, TMode::Partial);
+        assert_eq!(partial.len(), 2);
+        assert_eq!(partial[0].text, "ab");
+        assert_eq!(partial[1].text, "cd");
     }
 
     #[test]
