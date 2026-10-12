@@ -103,6 +103,8 @@ mod tests {
             translate_url: String::new(),
             translate_mode: "bergamot".to_string(),
             external_auto_exit: true,
+            external_fallback: false,
+            external_fallback_ask: true,
             translate_source: "auto".to_string(),
             translate_target: "auto".to_string(),
             save_dir: None,

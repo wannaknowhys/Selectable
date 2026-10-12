@@ -133,10 +133,14 @@ async function fetchTranslatePair(lock, pair) {
     const base_name = path.basename(f.path).replace(/\.gz$/, '');
     const dest = path.join(dir, base_name);
     names[key] = base_name;
-    if (fs.existsSync(dest)) {
+    // Corrupt/truncated leftovers must NOT count as present (same tripwire
+    // as pair_complete on the Rust side): re-fetch when a recorded size
+    // mismatches.
+    if (fs.existsSync(dest) && (!f.uncompressedSize || fs.statSync(dest).size === f.uncompressedSize)) {
       console.log(`  ${pair}/${base_name} already present, skipping`);
       continue;
     }
+    if (fs.existsSync(dest)) console.log(`  ${pair}/${base_name} size mismatch, re-fetching`);
     console.log(`  downloading ${pair}/${base_name}`);
     const data = await getBuffer(`${base}/${f.path}`);
     const raw = f.path.endsWith('.gz') ? zlib.gunzipSync(data) : data;

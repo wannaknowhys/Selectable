@@ -32,6 +32,9 @@ fn main() -> Result<()> {
         );
     }
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--dialog-test") {
+        return overlay::run_dialog_test();
+    }
     let once = args.iter().any(|a| a == "--once");
     let show_ui = args.iter().any(|a| a == "--overlay");
     let overlay_test = args.iter().any(|a| a == "--overlay-test");
@@ -90,6 +93,8 @@ pub(crate) fn capture_and_show(
         translate_url: cfg.translate_url.clone(),
         translate_mode: cfg.translate_mode.clone(),
         external_auto_exit: cfg.external_auto_exit,
+        external_fallback: cfg.external_fallback,
+        external_fallback_ask: cfg.external_fallback_ask,
         translate_source: cfg.translate_source.clone(),
         translate_target: cfg.translate_target.clone(),
         save_dir: cfg.save_dir.clone(),

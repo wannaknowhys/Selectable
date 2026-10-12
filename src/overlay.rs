@@ -53,7 +53,7 @@ use windows::{
                 TPM_RETURNCMD, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
                 WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
                 WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW,
-                WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WS_VSCROLL, SetTimer,
+                WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WS_VSCROLL, SetTimer, SM_CXSCREEN, SM_CYSCREEN,
             },
         },
     },
@@ -93,6 +93,8 @@ pub struct OverlayRequest {
     pub translate_url: String,
     pub translate_mode: String,
     pub external_auto_exit: bool,
+    pub external_fallback: bool,
+    pub external_fallback_ask: bool,
     pub translate_source: String,
     pub translate_target: String,
     pub save_dir: Option<String>,
@@ -204,6 +206,8 @@ struct State {
     translate_url: String,
     translate_mode: String,
     external_auto_exit: bool,
+    external_fallback: bool,
+    external_fallback_ask: bool,
     save_dir: Option<String>,
     hwnd: HWND,
     // Async OCR.
@@ -271,6 +275,16 @@ pub fn show_overlay(req: OverlayRequest, rx: &std::sync::mpsc::Receiver<OcrReply
     show_overlay_inner(req, rx, None)
 }
 
+/// Dev harness: `--dialog-test` shows the fallback consent dialog standalone
+/// (no OCR, no overlay), prints the choice, exits. Deterministic UI check
+/// without model juggling; persistence is unit-tested, not exercised here.
+pub fn run_dialog_test() -> Result<()> {
+    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    let c = ask_external_fallback(NULL_HWND, "translate.google.com", (w / 2, h / 2));
+    println!("dialog-test: open={} remember={}", c.open, c.remember);
+    Ok(())
+}
+
 /// Headless smoke test: destroys the window after `ms`.
 pub fn show_overlay_autoclose(
     req: OverlayRequest,
@@ -330,6 +344,8 @@ fn show_overlay_inner(
             translate_url: req.translate_url,
             translate_mode: req.translate_mode,
             external_auto_exit: req.external_auto_exit,
+            external_fallback: req.external_fallback,
+            external_fallback_ask: req.external_fallback_ask,
             save_dir: req.save_dir,
             hwnd: NULL_HWND,
             rx: rx as *const _,
@@ -897,9 +913,9 @@ fn on_tick(st: &mut State, id: usize) {
                 st.translating = false;
                 if let Some(e) = rep.error {
                     st.pending = None;
-                    let url = fill_url(&st.translate_url, &selected_or_all(st));
-                    let msg = format!("翻译失败，已转外部：{e}");
-                    open_external(st, &url, &msg);
+                    let text = selected_or_all(st);
+                    let msg = format!("{e:#}");
+                    translate_failure_fallback(st, &text, &msg);
                 } else if let Some(pending) = st.pending.take() {
                     // Worker Vec order matches the submitted regions (R4).
                     let regions = pending
@@ -1254,6 +1270,242 @@ fn start_translate(st: &mut State, mode: TMode) {
 /// R5: confirm when the source is neither English nor the system locale.
 fn needs_download_confirm(src: &str) -> bool {
     !(src.eq_ignore_ascii_case("en") || src.eq_ignore_ascii_case(&lang::system_lang()))
+}
+
+/// Engine-failure fallback: auto-open when the user enabled it; otherwise
+/// ask once, disclosing the destination host. Remembered answers persist to
+/// config.toml (a write failure only toasts — the in-memory choice still
+/// applies to this run).
+fn translate_failure_fallback(st: &mut State, text: &str, err: &str) {
+    let url = fill_url(&st.translate_url, text);
+    if st.external_fallback {
+        open_external(st, &url, &format!("翻译失败，已转外部：{err}"));
+        return;
+    }
+    if !st.external_fallback_ask {
+        show_toast(st, format!("翻译失败：{err}"));
+        return;
+    }
+    let host = url_host(&url).to_string();
+    let f = &st.focus;
+    let center = ((f.l + f.r) / 2, (f.t + f.b) / 2);
+    match ask_external_fallback(st.hwnd, &host, center) {
+        FallbackChoice { open: true, remember } => {
+            if remember {
+                st.external_fallback = true;
+                if let Err(e) = persist_translate_key("external_fallback", "true") {
+                    // Window dies on open below; the in-memory flag still
+                    // holds for this run, the file retry happens next time.
+                    dlog(format!("persist external_fallback failed: {e:#}"));
+                }
+            }
+            open_external(st, &url, &format!("翻译失败，已转外部：{err}"));
+        }
+        FallbackChoice { open: false, remember } => {
+            if remember {
+                st.external_fallback_ask = false;
+                if let Err(e) = persist_translate_key("external_fallback_ask", "false") {
+                    show_toast(st, format!("记住选择失败：{e:#}"));
+                    return;
+                }
+            }
+            show_toast(st, "已取消".to_string());
+        }
+    }
+}
+
+fn persist_translate_key(key: &str, value: &str) -> anyhow::Result<()> {
+    let path = config_write_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    std::fs::write(&path, set_translate_key(&old, key, value))?;
+    Ok(())
+}
+
+/// Result of the fallback consent dialog.
+struct FallbackChoice {
+    open: bool,
+    remember: bool,
+}
+
+/// Modal Yes/No + "don't ask again" checkbox for the engine-failure
+/// fallback. Hand-rolled (no .rc in this repo): popup window + STATIC +
+/// CHECKBOX + two buttons centered on the focus monitor (never the bezel
+/// seam), owner disabled during the modal loop. Esc/X = No without remembering.
+fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> FallbackChoice {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BM_GETCHECK, BN_CLICKED, CreateWindowExW,
+        DefWindowProcW, DispatchMessageW, GetMessageW,
+        IsDialogMessageW, RegisterClassW, SetWindowLongPtrW, GetWindowLongPtrW,
+        ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_ID, GWLP_USERDATA,
+        IDCANCEL, IDOK, SW_SHOWNORMAL, WINDOW_STYLE, WM_CLOSE, WM_NCCREATE,
+        WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_DLGMODALFRAME, WS_POPUP,
+        WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+    use windows::Win32::Graphics::Gdi::CreateSolidBrush;
+
+    struct Dlg {
+        check: HWND,
+        open: bool,
+        remember: bool,
+        done: bool,
+    }
+
+    unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        use windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW;
+        if msg == WM_NCCREATE {
+            let cs = &*(lp.0 as *const CREATESTRUCTW);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
+        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Dlg;
+        if ptr.is_null() {
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
+        let d = &mut *ptr;
+        match msg {
+            WM_COMMAND => {
+                let id = (wp.0 & 0xffff) as u32;
+                let code = ((wp.0 >> 16) & 0xffff) as u32;
+                if code == BN_CLICKED && (id == IDOK.0 as u32 || id == IDCANCEL.0 as u32) {
+                    d.open = id == IDOK.0 as u32;
+                    d.remember = SendMessageW(d.check, BM_GETCHECK, None, None).0 == 1; // BST_CHECKED
+                    d.done = true;
+                    LRESULT(0)
+                } else {
+                    DefWindowProcW(hwnd, msg, wp, lp)
+                }
+            }
+            WM_CLOSE => {
+                d.done = true; // X = No, forget.
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wp, lp),
+        }
+    }
+
+    unsafe {
+        static mut REGISTERED: bool = false;
+        if !REGISTERED {
+            // Dialog-gray brush intentionally leaked (process-lifetime class).
+            let bg = CreateSolidBrush(COLORREF(0xF0F0F0));
+            let cls = WNDCLASSW {
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(dlg_proc),
+                hInstance: windows::Win32::Foundation::HINSTANCE(null_mut()),
+                hbrBackground: bg.into(),
+                lpszClassName: w!("SelectableFallback"),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                ..std::mem::zeroed()
+            };
+            let _ = RegisterClassW(&cls);
+            REGISTERED = true;
+        }
+        // Center on the focus monitor (the button row lives there too).
+        let (cx, cy) = center;
+        const W: i32 = 460;
+        const H: i32 = 215;
+        let mut state = Box::new(Dlg { check: NULL_HWND, open: false, remember: false, done: false });
+        let ptr = state.as_mut() as *mut Dlg;
+        let dlg = CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            w!("SelectableFallback"),
+            w!("本地翻译失败"),
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            cx - W / 2,
+            cy - H / 2,
+            W,
+            H,
+            Some(owner),
+            None,
+            None,
+            Some(ptr as *const _),
+        )
+        .unwrap_or_default();
+        if dlg.is_invalid() {
+            return FallbackChoice { open: false, remember: false };
+        }
+        let body = format!("本地翻译失败。\n是否用外部浏览器继续？\n\n选中文本将被发送到：{host}");
+        let wbody: Vec<u16> = body.encode_utf16().chain([0]).collect();
+        let _ = CreateWindowExW(
+            Default::default(),
+            w!("STATIC"),
+            PCWSTR(wbody.as_ptr()),
+            WS_CHILD | WS_VISIBLE, // SS_LEFT == 0: plain static wraps by default.
+            16, 12, 428, 92,
+            Some(dlg),
+            None,
+            None,
+            None,
+        );
+        let check = CreateWindowExW(
+            Default::default(),
+            w!("BUTTON"),
+            w!("下次不再问"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            16, 112, 200, 24,
+            Some(dlg),
+            None,
+            None,
+            None,
+        )
+        .unwrap_or_default();
+        let yes = CreateWindowExW(
+            Default::default(),
+            w!("BUTTON"),
+            w!("是"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
+            256, 170, 90, 28,
+            Some(dlg),
+            None,
+            None,
+            None,
+        )
+        .unwrap_or_default();
+        let no = CreateWindowExW(
+            Default::default(),
+            w!("BUTTON"),
+            w!("否"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            356, 170, 90, 28,
+            Some(dlg),
+            None,
+            None,
+            None,
+        )
+        .unwrap_or_default();
+        // IDs drive the result (Enter/Tab/Esc via IsDialogMessage below).
+        SetWindowLongPtrW(yes, GWLP_ID, IDOK.0 as isize);
+        SetWindowLongPtrW(no, GWLP_ID, IDCANCEL.0 as isize);
+        (*ptr).check = check;
+        let _ = SetFocus(Some(yes));
+        let _ = ShowWindow(dlg, SW_SHOWNORMAL);
+        let _ = EnableWindow(owner, false);
+        // Modal loop with dialog navigation (Tab/Enter/Esc).
+        let mut msg: MSG = std::mem::zeroed();
+        while !(*ptr).done {
+            let r = GetMessageW(&mut msg, None, 0, 0);
+            if !r.as_bool() {
+                break;
+            }
+            if IsDialogMessageW(dlg, &msg).as_bool() {
+                continue;
+            }
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        let choice = FallbackChoice { open: (*ptr).open, remember: (*ptr).remember };
+        drop(Box::from_raw(ptr));
+        std::mem::forget(state);
+        let _ = DestroyWindow(dlg);
+        let _ = EnableWindow(owner, true);
+        let _ = SetForegroundWindow(owner);
+        let _ = SetFocus(Some(owner));
+        choice
+    }
 }
 
 /// Modal YESNO on the overlay: one line per leg + total MB (a pivot confirms
@@ -2066,6 +2318,67 @@ fn fill_url(template: &str, text: &str) -> String {
     template.replace("{text}", &url_encode(text))
 }
 
+/// Host part of a URL for the fallback consent dialog
+/// ("translate.google.com"), so users see WHERE their text goes.
+fn url_host(url: &str) -> &str {
+    let s = url.split("://").nth(1).unwrap_or(url);
+    let s = s.split('/').next().unwrap_or(s);
+    s.split('?').next().unwrap_or(s)
+}
+
+/// Set `key = value` under `[translate]`, preserving everything else
+/// (comments, order, other sections). Creates the file/section when missing.
+/// Line-based on purpose: no new deps, comments survive byte-for-byte.
+fn set_translate_key(src: &str, key: &str, value: &str) -> String {
+    let nl = if src.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut lines: Vec<String> = if src.is_empty() { Vec::new() } else { src.split('\n').map(str::to_string).collect() };
+    // Strip a single trailing empty line; re-added at the end.
+    if lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+        lines.pop();
+    }
+    let is_header = |l: &str| l.trim().starts_with('[');
+    let is_key = |l: &str| {
+        let t = l.trim_start();
+        !t.starts_with('#') && t.starts_with(key) && t[key.len()..].trim_start().starts_with('=')
+    };
+    let hdr = lines.iter().position(|l| l.trim() == "[translate]");
+    match hdr {
+        Some(h) => {
+            let end = lines.iter().skip(h + 1).position(|l| is_header(l)).map(|i| h + 1 + i).unwrap_or(lines.len());
+            if let Some(pos) = lines[h + 1..end].iter().position(|l| is_key(l)) {
+                lines[h + 1 + pos] = format!("{key} = {value}");
+            } else {
+                lines.insert(h + 1, format!("{key} = {value}"));
+            }
+        }
+        None => {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push("[translate]".to_string());
+            lines.push(format!("{key} = {value}"));
+        }
+    }
+    lines.join(nl) + nl
+}
+
+/// Where AppConfig::load reads from (exe dir first, then cwd); the same file
+/// is the write target so remembered choices actually reload.
+fn config_write_path() -> std::path::PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+    if let Some(dir) = &exe_dir {
+        if dir.join("config.toml").is_file() {
+            return dir.join("config.toml");
+        }
+    }
+    if std::path::PathBuf::from("config.toml").is_file() {
+        return std::path::PathBuf::from("config.toml");
+    }
+    exe_dir.unwrap_or_else(|| std::path::PathBuf::from(".")).join("config.toml")
+}
+
 /// Bergamot pair code to a BCP47 tag for external translator URLs
 /// (Google wants zh-CN, not zh).
 fn external_lang_tag(code: &str) -> &str {
@@ -2140,7 +2453,8 @@ mod tests {
         State {
             bgra: Vec::new(), w: 0, h: 0, title: String::new(),
             search_url: String::new(), translate_url: String::new(), translate_mode: "bergamot".to_string(),
-            external_auto_exit: true, save_dir: None,
+            external_auto_exit: true, external_fallback: false, external_fallback_ask: true,
+            save_dir: None,
             hwnd: NULL_HWND, rx: std::ptr::null(),
             ready: false, load_error: None, lines: Vec::new(), tier: String::new(),
             spinner: 0, sel: None, press_at: None, anchor: None, cursor: None,
@@ -2251,6 +2565,41 @@ mod tests {
         assert_eq!(external_lang_tag("zh_hant"), "zh-TW");
         assert_eq!(external_lang_tag("en"), "en");
         assert_eq!(external_lang_tag("ja"), "ja");
+    }
+
+    #[test]
+    fn url_host_extracts() {
+        assert_eq!(url_host("https://translate.google.com/?sl=auto&text=x"), "translate.google.com");
+        assert_eq!(url_host("https://www.bing.com/search?q=x"), "www.bing.com");
+        assert_eq!(url_host("https://host:8080/p?q=x"), "host:8080");
+        assert_eq!(url_host("https://host?q=x"), "host");
+        assert_eq!(url_host("plain-host/path"), "plain-host");
+    }
+
+    #[test]
+    fn translate_key_roundtrips() {
+        // Replace in place, comments survive.
+        let src = "# comment\n[translate]\nsource = \"bergamot\"\n";
+        let out = set_translate_key(src, "external_fallback", "true");
+        assert!(out.contains("external_fallback = true"));
+        assert!(out.contains("# comment"));
+        assert!(out.contains("source = \"bergamot\""));
+        // Second write replaces, never duplicates.
+        let out2 = set_translate_key(&out, "external_fallback", "false");
+        assert_eq!(out2.matches("external_fallback =").count(), 1);
+        // Insert into an existing section (after the header).
+        let out3 = set_translate_key("[translate]\nsource = \"x\"\n[search]\nengine = \"y\"\n", "external_fallback_ask", "false");
+        assert!(out3.contains("[translate]\nexternal_fallback_ask = false\nsource = \"x\""));
+        // Commented key does not count as present.
+        let out4 = set_translate_key("[translate]\n#external_fallback = true\n", "external_fallback", "true");
+        assert_eq!(out4.matches("external_fallback =").count(), 2); // comment + real
+        assert!(out4.contains("\nexternal_fallback = true\n"));
+        // Missing file/section: created.
+        assert_eq!(set_translate_key("", "external_fallback", "true"), "[translate]\nexternal_fallback = true\n");
+        // Prefix trap: external_fallback must not match external_fallback_ask.
+        let out5 = set_translate_key("[translate]\nexternal_fallback_ask = true\n", "external_fallback", "true");
+        assert!(out5.contains("external_fallback_ask = true"));
+        assert!(out5.contains("\nexternal_fallback = true\n"));
     }
 
     #[test]

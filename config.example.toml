@@ -15,6 +15,13 @@ external_url = "https://translate.google.com/?sl=auto&tl={tgt}&text={text}"
 # Exit the fullscreen overlay after any external browser launch (search +
 # translate fallbacks) so the just-opened browser is visible. false = stay.
 external_auto_exit = true
+# Privacy gate for AUTOMATIC fallbacks (engine failure / unsupported pairs):
+# never opens the browser on its own unless true. Explicit clicks and
+# source=external bypass this gate. Search never asks (clicking it IS consent).
+external_fallback = false
+# Ask before the fallback above (NO = one-shot toast). The dialog's
+# "don't ask again" persists the choice here.
+external_fallback_ask = true
 
 [search]
 # Preset name; explicit engine_url wins when uncommented.

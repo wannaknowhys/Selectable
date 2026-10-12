@@ -340,10 +340,22 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
   online：未接线，设了会 toast 回退本地。online 涉及选型+key+隐私，另议。
 - **Esc 分级**：有翻译（含在翻）→取消翻译；无翻译有选中→清选中；都没有→
   关窗。每级都顺手清 toast。
+- **隐私原则（用户决议）**：绝不在未明示时把字符串发上网。亲手点的动作
+  （搜索、`source=external` 下的每次翻译）= 明示，不问；binary 自动的兜底
+  （引擎失败、语对不支持）要 consent：`[translate] external_fallback`
+  默认 false，失败时弹模态确认框（明示目标 host + “下次不再问”复选框，
+  选择回写 config.toml 行级保留注释），不支持只 toast + hint 不纠缠。
 - **右键菜单全选**：`全选` 项选中全部 OCR 行（空屏则不选），之后复制/翻译/
   搜索都作用于它。
 
 ### 12.11 待办（CI 之后，先不做）
+
+- **确认框系统字体 + 自适应尺寸**：手写对话框没设字体，回退到 legacy System
+  位图字体，和记事本的 Segoe UI 9pt / 微软雅黑完全两样。修法：
+  `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)` 取 `lfMessageFont` →
+  `CreateFontIndirectW` → 全控件 `WM_SETFONT`。写死的 `460x215` 是整窗尺寸
+  （含标题栏），客户区更矮，所以 是/否 按钮被挤出可视区。修法：
+  `AdjustWindowRectEx` + `DT_CALCRECT` 量正文后挪复选框/按钮。
 
 - **界面多语言化（i18n）**：应用全部字符串（菜单/按钮/toast/对话框）走 string
   table，`config.toml [ui] lang` 选择界面语言（默认 `auto` 跟系统 locale），

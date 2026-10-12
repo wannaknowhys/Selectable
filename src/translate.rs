@@ -282,13 +282,40 @@ fn hex_of(bytes: &[u8]) -> String {
 }
 
 /// Local model triple present? (model + vocabs + shortlist + config.yml)
+/// The model file size must match the baked manifest when known: a truncated
+/// or half-written file must NOT reach Marian (a corrupt binary aborts the
+/// process with an access violation that no try/catch can catch — fail here
+/// instead so the download path re-fetches it).
 pub fn pair_complete(models_dir: &Path, pair: &str) -> bool {
     let dir = models_dir.join(pair);
-    dir.join("config.yml").is_file()
-        && dir
-            .read_dir()
-            .map(|mut rd| rd.any(|e| e.map(|e| e.file_name().to_string_lossy().contains("intgemm")).unwrap_or(false)))
-            .unwrap_or(false)
+    if !dir.join("config.yml").is_file() {
+        return false;
+    }
+    let has_model = dir
+        .read_dir()
+        .map(|mut rd| {
+            rd.any(|e| {
+                e.map(|e| e.file_name().to_string_lossy().contains("intgemm")).unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    if !has_model {
+        return false;
+    }
+    // Size tripwire against truncation (metadata only, no hashing per click).
+    if let Some(files) = pair_files(pair) {
+        if let Some(f) = files.iter().find(|f| f.key == "model" && f.size != 0) {
+            let base = f.path.rsplit('/').next().unwrap_or("file").trim_end_matches(".gz");
+            if let Ok(meta) = std::fs::metadata(dir.join(base)) {
+                if meta.len() != f.size {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Write bergamot config.yml (single-vocab models list it twice).
@@ -530,6 +557,21 @@ mod tests {
         // Baked chain sizes are nonzero (confirm-box MB figure).
         assert!(chain_total_bytes(&["jaen".to_string(), "enzh".to_string()]) > 0);
         assert!(chain_total_bytes(&["enzh".to_string()]) > 0);
+    }
+
+    #[test]
+    fn pair_complete_rejects_truncated_models() {
+        // A truncated model must fail the check (never reach Marian: corrupt
+        // binaries abort the process with an AV no catch can catch) so the
+        // download path re-fetches it.
+        let root = std::env::temp_dir().join("selectable-pair-probe");
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("enzh");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.yml"), "x").unwrap();
+        std::fs::write(dir.join("model.enzh.intgemm.alphas.bin"), vec![0u8; 1024]).unwrap();
+        assert!(!pair_complete(&root, "enzh"), "truncated model must be incomplete");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // One test owns engines sequentially: the native side allows a single

@@ -109,6 +109,15 @@ struct TranslateSection {
     /// otherwise hide the just-opened browser.
     #[serde(default = "default_true")]
     external_auto_exit: bool,
+    /// Auto-open the browser on engine failure / unsupported pairs WITHOUT
+    /// asking. Default off (privacy: no user string leaves the machine
+    /// without explicit consent; explicit clicks and source=external bypass).
+    #[serde(default)]
+    external_fallback: bool,
+    /// Ask before the fallback above (NO = one-shot toast). The dialog's
+    /// "don't ask again" persists the choice back to config.toml.
+    #[serde(default = "default_true")]
+    external_fallback_ask: bool,
     /// Source language override ("auto" = detect per trigger).
     #[serde(default = "default_auto")]
     source_lang: String,
@@ -123,6 +132,8 @@ impl Default for TranslateSection {
             source: default_source_mode(),
             external_url: default_translate_url(),
             external_auto_exit: true,
+            external_fallback: false,
+            external_fallback_ask: true,
             source_lang: default_auto(),
             target_lang: default_auto(),
         }
@@ -170,6 +181,8 @@ pub struct AppConfig {
     pub translate_url: String,
     pub translate_mode: String,
     pub external_auto_exit: bool,
+    pub external_fallback: bool,
+    pub external_fallback_ask: bool,
     pub translate_source: String,
     pub translate_target: String,
     pub save_dir: Option<String>,
@@ -198,6 +211,8 @@ impl AppConfig {
                     translate_url: fc.translate.external_url,
                     translate_mode: normalize_source_mode(&fc.translate.source).to_string(),
                     external_auto_exit: fc.translate.external_auto_exit,
+                    external_fallback: fc.translate.external_fallback,
+                    external_fallback_ask: fc.translate.external_fallback_ask,
                     translate_source: fc.translate.source_lang,
                     translate_target: fc.translate.target_lang,
                     save_dir: fc.save.dir,
@@ -214,6 +229,8 @@ impl AppConfig {
             translate_url: default_translate_url(),
             translate_mode: default_source_mode(),
             external_auto_exit: true,
+            external_fallback: false,
+            external_fallback_ask: true,
             translate_source: default_auto(),
             translate_target: default_auto(),
             save_dir: None,
