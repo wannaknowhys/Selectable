@@ -1330,17 +1330,86 @@ struct FallbackChoice {
     remember: bool,
 }
 
+/// Client-space geometry of the fallback consent dialog (all px).
+const FALLBACK_MARGIN: i32 = 16;
+const FALLBACK_TEXT_W: i32 = 428;
+const FALLBACK_CLIENT_W: i32 = FALLBACK_MARGIN * 2 + FALLBACK_TEXT_W;
+const FALLBACK_BODY_Y: i32 = 12;
+const FALLBACK_CHECK_H: i32 = 24;
+const FALLBACK_BTN_W: i32 = 96;
+const FALLBACK_BTN_H: i32 = 30;
+
+/// Pure layout: client size + control rows from the measured body height.
+/// Returns `(client_w, client_h, check_y, btn_y)`.
+/// Regression anchor: the old fixed 215px frame clipped Yes/No (its client
+/// area was ~185px); buttons must always end inside the client rect.
+fn fallback_layout(body_h: i32) -> (i32, i32, i32, i32) {
+    let check_y = FALLBACK_BODY_Y + body_h.max(32) + 10;
+    let btn_y = check_y + FALLBACK_CHECK_H + 14;
+    let client_h = btn_y + FALLBACK_BTN_H + FALLBACK_MARGIN;
+    (FALLBACK_CLIENT_W, client_h, check_y, btn_y)
+}
+
+/// System message font: the same source Notepad/dialogs use (Segoe UI 9pt on
+/// en, YaHei UI on zh-CN). Returns the font plus whether the caller owns it
+/// (stock objects must not be deleted). Never fails: stock font fallback.
+fn fallback_font() -> (HFONT, bool) {
+    use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, GetStockObject, DEFAULT_GUI_FONT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+        SystemParametersInfoW,
+    };
+    unsafe {
+        let mut ncm: NONCLIENTMETRICSW = std::mem::zeroed();
+        ncm.cbSize = std::mem::size_of::<NONCLIENTMETRICSW>() as u32;
+        let ok = SystemParametersInfoW(
+            SPI_GETNONCLIENTMETRICS,
+            ncm.cbSize,
+            Some(&mut ncm as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .is_ok();
+        if ok {
+            let f = CreateFontIndirectW(&ncm.lfMessageFont);
+            if !f.is_invalid() {
+                return (f, true);
+            }
+        }
+        (HFONT(GetStockObject(DEFAULT_GUI_FONT).0), false)
+    }
+}
+
+/// Wrapped height of `text` at `text_w` px in `font` (screen DC, discarded).
+fn fallback_text_h(font: HFONT, text: &str, text_w: i32) -> i32 {
+    use windows::Win32::Graphics::Gdi::{DrawTextW, GetDC, ReleaseDC, SelectObject, DT_CALCRECT};
+    unsafe {
+        let dc = GetDC(Some(NULL_HWND));
+        let old = SelectObject(dc, font.into());
+        let mut txt: Vec<u16> = text.encode_utf16().collect();
+        let mut rc = RECT { left: 0, top: 0, right: text_w, bottom: 0 };
+        DrawTextW(dc, &mut txt, &mut rc, DT_CALCRECT | DT_WORDBREAK | DT_LEFT | DT_NOPREFIX);
+        SelectObject(dc, old);
+        let _ = ReleaseDC(Some(NULL_HWND), dc);
+        (rc.bottom - rc.top).max(40)
+    }
+}
+
 /// Modal Yes/No + "don't ask again" checkbox for the engine-failure
 /// fallback. Hand-rolled (no .rc in this repo): popup window + STATIC +
 /// CHECKBOX + two buttons centered on the focus monitor (never the bezel
 /// seam), owner disabled during the modal loop. Esc/X = No without remembering.
+///
+/// Controls take the system message font (same source as Notepad) via
+/// `WM_SETFONT`; the frame is measured from the wrapped body text
+/// (`DT_CALCRECT` + `AdjustWindowRectEx`), so any host length keeps Yes/No
+/// on screen.
 fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> FallbackChoice {
     use windows::Win32::UI::WindowsAndMessaging::{
-        BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BM_GETCHECK, BN_CLICKED, CreateWindowExW,
+        AdjustWindowRectEx, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BM_GETCHECK, BN_CLICKED, CreateWindowExW,
         DefWindowProcW, DispatchMessageW, GetMessageW,
         IsDialogMessageW, RegisterClassW, SetWindowLongPtrW, GetWindowLongPtrW,
         ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_ID, GWLP_USERDATA,
-        IDCANCEL, IDOK, SW_SHOWNORMAL, WINDOW_STYLE, WM_CLOSE, WM_NCCREATE,
+        IDCANCEL, IDOK, SW_SHOWNORMAL, WINDOW_STYLE, WM_CLOSE, WM_NCCREATE, WM_SETFONT,
         WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_DLGMODALFRAME, WS_POPUP,
         WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
     };
@@ -1405,20 +1474,29 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
             REGISTERED = true;
         }
         // Center on the focus monitor (the button row lives there too).
+        // The frame is derived from the client rect: fixed W/H clipped the
+        // buttons because the caption eats ~30px (see fallback_layout).
+        let body = format!("本地翻译失败。\n是否用外部浏览器继续？\n\n选中文本将被发送到：{host}");
+        let (hfont, owned) = fallback_font();
+        let body_h = fallback_text_h(hfont, &body, FALLBACK_TEXT_W);
+        let (client_w, client_h, check_y, btn_y) = fallback_layout(body_h);
+        let style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+        let mut frame = RECT { left: 0, top: 0, right: client_w, bottom: client_h };
+        let _ = AdjustWindowRectEx(&mut frame, style, false, WS_EX_DLGMODALFRAME);
+        let win_w = frame.right - frame.left;
+        let win_h = frame.bottom - frame.top;
         let (cx, cy) = center;
-        const W: i32 = 460;
-        const H: i32 = 215;
         let mut state = Box::new(Dlg { check: NULL_HWND, open: false, remember: false, done: false });
         let ptr = state.as_mut() as *mut Dlg;
         let dlg = CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             w!("SelectableFallback"),
             w!("本地翻译失败"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            cx - W / 2,
-            cy - H / 2,
-            W,
-            H,
+            style,
+            cx - win_w / 2,
+            cy - win_h / 2,
+            win_w,
+            win_h,
             Some(owner),
             None,
             None,
@@ -1426,39 +1504,44 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
         )
         .unwrap_or_default();
         if dlg.is_invalid() {
+            if owned {
+                let _ = DeleteObject(hfont.into());
+            }
             return FallbackChoice { open: false, remember: false };
         }
-        let body = format!("本地翻译失败。\n是否用外部浏览器继续？\n\n选中文本将被发送到：{host}");
         let wbody: Vec<u16> = body.encode_utf16().chain([0]).collect();
-        let _ = CreateWindowExW(
+        let body_ctl = CreateWindowExW(
             Default::default(),
             w!("STATIC"),
             PCWSTR(wbody.as_ptr()),
             WS_CHILD | WS_VISIBLE, // SS_LEFT == 0: plain static wraps by default.
-            16, 12, 428, 92,
-            Some(dlg),
-            None,
-            None,
-            None,
-        );
-        let check = CreateWindowExW(
-            Default::default(),
-            w!("BUTTON"),
-            w!("下次不再问"),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-            16, 112, 200, 24,
+            FALLBACK_MARGIN, FALLBACK_BODY_Y, FALLBACK_TEXT_W, body_h,
             Some(dlg),
             None,
             None,
             None,
         )
         .unwrap_or_default();
+        let check = CreateWindowExW(
+            Default::default(),
+            w!("BUTTON"),
+            w!("下次不再问"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            FALLBACK_MARGIN, check_y, 200, FALLBACK_CHECK_H,
+            Some(dlg),
+            None,
+            None,
+            None,
+        )
+        .unwrap_or_default();
+        let no_x = client_w - FALLBACK_MARGIN - FALLBACK_BTN_W;
+        let yes_x = no_x - 10 - FALLBACK_BTN_W;
         let yes = CreateWindowExW(
             Default::default(),
             w!("BUTTON"),
             w!("是"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
-            256, 170, 90, 28,
+            yes_x, btn_y, FALLBACK_BTN_W, FALLBACK_BTN_H,
             Some(dlg),
             None,
             None,
@@ -1470,13 +1553,18 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
             w!("BUTTON"),
             w!("否"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            356, 170, 90, 28,
+            no_x, btn_y, FALLBACK_BTN_W, FALLBACK_BTN_H,
             Some(dlg),
             None,
             None,
             None,
         )
         .unwrap_or_default();
+        // System font on every control (hand-rolled windows get none by
+        // default, which falls back to the legacy bitmap font).
+        for c in [body_ctl, check, yes, no] {
+            SendMessageW(c, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+        }
         // IDs drive the result (Enter/Tab/Esc via IsDialogMessage below).
         SetWindowLongPtrW(yes, GWLP_ID, IDOK.0 as isize);
         SetWindowLongPtrW(no, GWLP_ID, IDCANCEL.0 as isize);
@@ -1501,6 +1589,9 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
         drop(Box::from_raw(ptr));
         std::mem::forget(state);
         let _ = DestroyWindow(dlg);
+        if owned {
+            let _ = DeleteObject(hfont.into());
+        }
         let _ = EnableWindow(owner, true);
         let _ = SetForegroundWindow(owner);
         let _ = SetFocus(Some(owner));
@@ -2574,6 +2665,18 @@ mod tests {
         assert_eq!(url_host("https://host:8080/p?q=x"), "host:8080");
         assert_eq!(url_host("https://host?q=x"), "host");
         assert_eq!(url_host("plain-host/path"), "plain-host");
+    }
+
+    #[test]
+    fn fallback_layout_buttons_fit_client() {
+        // The old fixed 215px frame clipped Yes/No (client was ~185px).
+        for body_h in [8, 32, 60, 92, 150, 300] {
+            let (w, h, check_y, btn_y) = fallback_layout(body_h);
+            assert_eq!(w, 460);
+            assert!(check_y >= 12 + body_h.max(32) + 10, "check below body {body_h}");
+            assert!(btn_y >= check_y + 24, "buttons below checkbox");
+            assert!(h >= btn_y + 30 + 16, "buttons inside client: h={h} btn_y={btn_y}");
+        }
     }
 
     #[test]

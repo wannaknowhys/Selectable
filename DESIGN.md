@@ -384,14 +384,6 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
 
 ### 12.11 Deferred (after CI, not started)
 
-- **Fallback dialog system font + auto-size**: hand-rolled dialog currently
-  sets no font (falls back to the legacy System bitmap font, unlike Notepad's
-  Segoe UI 9pt / YaHei CJK). Fix: `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)`
-  → `lfMessageFont` → `CreateFontIndirectW` → `WM_SETFONT` on all controls.
-  Fixed `460x215` also clips the Yes/No buttons (frame size includes the
-  caption; client area is shorter). Fix: `AdjustWindowRectEx` + `DT_CALCRECT`
-  measure the body text and move the checkbox/buttons accordingly.
-
 - **UI internationalization (i18n)**: every app string (menus/buttons/toasts/
   dialogs) goes through a string table, `config.toml [ui] lang` picks the UI
   language (default `auto` follows the system locale), English + Chinese

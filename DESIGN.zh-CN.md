@@ -350,13 +350,6 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
 
 ### 12.11 待办（CI 之后，先不做）
 
-- **确认框系统字体 + 自适应尺寸**：手写对话框没设字体，回退到 legacy System
-  位图字体，和记事本的 Segoe UI 9pt / 微软雅黑完全两样。修法：
-  `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)` 取 `lfMessageFont` →
-  `CreateFontIndirectW` → 全控件 `WM_SETFONT`。写死的 `460x215` 是整窗尺寸
-  （含标题栏），客户区更矮，所以 是/否 按钮被挤出可视区。修法：
-  `AdjustWindowRectEx` + `DT_CALCRECT` 量正文后挪复选框/按钮。
-
 - **界面多语言化（i18n）**：应用全部字符串（菜单/按钮/toast/对话框）走 string
   table，`config.toml [ui] lang` 选择界面语言（默认 `auto` 跟系统 locale），
   首版中英两表，查表带回退链。

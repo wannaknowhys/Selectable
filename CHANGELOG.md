@@ -19,3 +19,8 @@
   from the local Firefox search-config registry; explicit `engine_url` wins.
 - Right-click menu: select-all, translate-selected-text, translate-all-text;
   staged Esc (cancel translation → clear selection → close).
+
+### Fixed
+- Fallback consent dialog now uses the system message font (same as Notepad)
+  and measures the frame from the wrapped body text, so Yes/No buttons are
+  never clipped regardless of host length.
