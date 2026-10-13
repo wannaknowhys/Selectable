@@ -13,7 +13,7 @@ use windows::{
                 Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
             },
             WindowsAndMessaging::{
-                AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+                CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
                 DestroyWindow, DispatchMessageW, GetCursorPos, GetWindowLongPtrW, GetMessageW,
                 LoadCursorW, LoadIconW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
                 SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
@@ -31,6 +31,7 @@ const WM_TRAY: u32 = WM_APP + 10;
 const T_CAPTURE: usize = 3001;
 const T_QUIT: usize = 3002;
 const T_ABOUT: usize = 3003;
+const T_SETTINGS: usize = 3004;
 
 struct Ctx {
     worker: OcrWorker,
@@ -69,10 +70,21 @@ pub fn run_tray(worker: OcrWorker, cfg: AppConfig) -> Result<()> {
             Some(ctx.as_mut() as *mut Ctx as *const _),
         )?;
         // Hotkey lives on this window now (not the bare thread).
-        let hk_ok = crate::hotkey::register_shift_printscreen_on(hwnd).is_ok();
+        // First configured combo wins; unparseable/taken falls back to default.
+        let hk = ctx
+            .cfg
+            .combos
+            .first()
+            .and_then(|s| crate::hotkey::parse_combo(s))
+            .unwrap_or_else(crate::hotkey::default_hotkey);
+        let hk_ok = crate::hotkey::register_on(hwnd, crate::hotkey::HOTKEY_ID, &hk).is_ok();
         ctx.hwnd = hwnd;
-        let tip = if hk_ok { "Selectable (Shift+PrintScreen)" } else { "Selectable (热键被占用，双击截图)" };
-        add_tray_icon(hwnd, tip)?;
+        let tip = if hk_ok {
+            format!("Selectable ({})", crate::hotkey::format_combo(&hk))
+        } else {
+            "Selectable (热键被占用，双击截图)".to_string()
+        };
+        add_tray_icon(hwnd, &tip)?;
         std::mem::forget(ctx);
 
         let mut msg: MSG = std::mem::zeroed();
@@ -159,9 +171,12 @@ fn tray_menu(ctx: &mut Ctx) {
         if menu.is_invalid() {
             return;
         }
-        let _ = AppendMenuW(menu, MF_STRING, T_CAPTURE, w!("截图取词"));
-        let _ = AppendMenuW(menu, MF_STRING, T_ABOUT, w!("关于"));
-        let _ = AppendMenuW(menu, MF_STRING, T_QUIT, w!("退出"));
+        let ui = crate::lang::resolve_ui_lang(Some(&ctx.cfg.ui_lang));
+        let mi = crate::settings::append_item;
+        mi(menu, MF_STRING, T_CAPTURE, crate::lang::tr(ui, "menu.capture"));
+        mi(menu, MF_STRING, T_SETTINGS, crate::lang::tr(ui, "menu.settings"));
+        mi(menu, MF_STRING, T_ABOUT, crate::lang::tr(ui, "menu.about"));
+        mi(menu, MF_STRING, T_QUIT, crate::lang::tr(ui, "menu.quit"));
         let mut pt = windows::Win32::Foundation::POINT { x: 0, y: 0 };
         let _ = GetCursorPos(&mut pt);
         // hwnd: message-only window has no real HWND for foreground; use its own.
@@ -171,6 +186,7 @@ fn tray_menu(ctx: &mut Ctx) {
         let _ = DestroyMenu(menu);
         match cmd.0 as usize {
             T_CAPTURE => do_capture(ctx),
+            T_SETTINGS => open_settings(ctx),
             T_ABOUT => crate::about::show_about(HWND(null_mut())),
             T_QUIT => {
                 let _ = DestroyWindow(hwnd);
@@ -183,5 +199,47 @@ fn tray_menu(ctx: &mut Ctx) {
 fn do_capture(ctx: &Ctx) {
     if let Err(e) = crate::capture_and_show(&ctx.worker, &ctx.cfg, None) {
         eprintln!("capture failed: {e:#}");
+    }
+}
+
+/// Settings from the tray: centered on the cursor monitor is overkill; the
+/// primary screen center is fine for a modal. Hotkey changes re-register
+/// live on the tray window; OCR/ui-language changes need a restart.
+fn open_settings(ctx: &mut Ctx) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    let o = crate::settings::run_settings(ctx.hwnd, (w / 2, h / 2), Some(ctx.hwnd));
+    if !o.saved {
+        return;
+    }
+    if o.hotkey_changed {
+        let new = crate::hotkey::parse_combo(&o.new_combo);
+        let ok = new.map(|h| crate::hotkey::unregister_then_register(ctx.hwnd, &h)).unwrap_or(false);
+        if !ok {
+            // Keep the old combo live; the file already holds the new one
+            // (next restart retries it), but say so loudly.
+            settings_note("热键注册失败，已保留旧热键（重启后重试新热键）");
+        }
+    }
+    // Pick up search/save/translate values for later captures.
+    if let Ok(cfg) = AppConfig::load() {
+        ctx.cfg = cfg;
+    }
+    if o.ocr_changed || o.ui_lang_changed || (o.hotkey_changed && o.needs_restart) {
+        settings_note("设置已保存，OCR/界面语言/热键部分需重启生效");
+    }
+}
+
+fn settings_note(text: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+    unsafe {
+        let t: Vec<u16> = text.encode_utf16().chain([0]).collect();
+        let cap: Vec<u16> = "Selectable".encode_utf16().chain([0]).collect();
+        MessageBoxW(
+            None,
+            windows::core::PCWSTR(t.as_ptr()),
+            windows::core::PCWSTR(cap.as_ptr()),
+            MB_OK | MB_ICONINFORMATION,
+        );
     }
 }

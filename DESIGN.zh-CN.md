@@ -352,4 +352,33 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
 
 - **界面多语言化（i18n）**：应用全部字符串（菜单/按钮/toast/对话框）走 string
   table，`config.toml [ui] lang` 选择界面语言（默认 `auto` 跟系统 locale），
-  首版中英两表，查表带回退链。
+  首版中英两表，查表带回退链。v1 表随设置框（§12.12）一起上；`auto` 复用
+  翻译已有的 `system_lang()` 解析。
+
+### 12.12 设置框（已做完，v1 范围）
+
+- **目标**：`config.toml` 全部键 GUI 可改，彻底告别手改文件。同一套对话框
+  实现，两个入口：托盘右键菜单 + 全屏 overlay 右键菜单（`设置`）。复用
+  fallback 确认框模式（`WM_SETFONT` 挂系统 `lfMessageFont`，
+  `DT_CALCRECT` + `AdjustWindowRectEx` 量框）。
+- **覆盖**：`[hotkey] combos`（v1 先占位，见下）、`[ocr] model/cascade/
+  rec_batch_size/use_directml`、`[translate] source/external_url/
+  external_auto_exit/external_fallback/external_fallback_ask/source_lang/
+  target_lang`、`[search] engine/engine_url`、`[save] dir`、`[ui] lang`
+  （新增：`auto|en|zh`，默认 `auto`）。
+- **落盘**：行级保留注释的 `set_translate_key` 推广到全 section（注释不丢）；
+  未知/非法值按现有 `normalize_*` 模式回退默认，绝不砖化启动。热键与界面
+  语言的生效规则见下。
+- **热键 v1（占位）**：捕获框直接收 `WM_KEYDOWN`（VK + 修饰键），不需要任何
+  hook；显示名用 `GetKeyNameTextW`（跟系统 locale 走，不用手维护对照表），
+  无名键回退 `0xNN`。校验：只接受 `RegisterHotKey` 吃得下的组合（修饰键 +
+  单 VK）；裸 `PrintScreen` / `Win+Shift+S` 系统占用，有 `WH_KEYBOARD_LL`
+  fallback 之前直接拒掉并提示。生效 = 托盘窗口上 unregister + re-register；
+  冲突则保留旧键并报错。`AppConfig.combos`（已是 `Vec` 解析）即 model，
+  生效时托盘重读。
+- **界面语言 v1**：重启生效（托盘退出重进）。菜单本来就是每次弹出重建；
+  对话框静态文本重开即新；toast 触发时查表。
+- **测试**：writer/校验纯函数 roundtrip（沿 `translate_key_roundtrips`
+  模式）、VK 显示名映射表测试、布局不裁剪测试（沿
+  `fallback_layout_buttons_fit_client` 模式）；`--settings-test` 独立入口
+  像 `--dialog-test` 一样单显对话框。

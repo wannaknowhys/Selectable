@@ -40,7 +40,7 @@ use windows::{
                 InitCommonControlsEx, INITCOMMONCONTROLSEX, ICC_STANDARD_CLASSES,
             },
             WindowsAndMessaging::{
-                AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+                CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
                 DestroyWindow, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
                 GetSystemMetrics, GetWindowLongPtrW, GetWindowTextW, LoadCursorW,
                 PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
@@ -80,6 +80,7 @@ const M_CLOSE: usize = 2007;
 const M_ABOUT: usize = 2008;
 const M_SELECT_ALL: usize = 2009;
 const M_TRANSLATE_ALL: usize = 2010;
+const M_SETTINGS: usize = 2011;
 const TICK_MS: u32 = 50;
 const TIMER_TICK: usize = 1;
 const TIMER_CLOSE: usize = 2;
@@ -98,6 +99,7 @@ pub struct OverlayRequest {
     pub translate_source: String,
     pub translate_target: String,
     pub save_dir: Option<String>,
+    pub ui_lang: String,
 }
 
 /// Source language selection: Auto(detect) or a forced code.
@@ -209,6 +211,7 @@ struct State {
     external_fallback: bool,
     external_fallback_ask: bool,
     save_dir: Option<String>,
+    ui_lang: String,
     hwnd: HWND,
     // Async OCR.
     rx: *const std::sync::mpsc::Receiver<OcrReply>,
@@ -347,6 +350,7 @@ fn show_overlay_inner(
             external_fallback: req.external_fallback,
             external_fallback_ask: req.external_fallback_ask,
             save_dir: req.save_dir,
+            ui_lang: req.ui_lang,
             hwnd: NULL_HWND,
             rx: rx as *const _,
             ready: false,
@@ -1350,50 +1354,6 @@ fn fallback_layout(body_h: i32) -> (i32, i32, i32, i32) {
     (FALLBACK_CLIENT_W, client_h, check_y, btn_y)
 }
 
-/// System message font: the same source Notepad/dialogs use (Segoe UI 9pt on
-/// en, YaHei UI on zh-CN). Returns the font plus whether the caller owns it
-/// (stock objects must not be deleted). Never fails: stock font fallback.
-fn fallback_font() -> (HFONT, bool) {
-    use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, GetStockObject, DEFAULT_GUI_FONT};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-        SystemParametersInfoW,
-    };
-    unsafe {
-        let mut ncm: NONCLIENTMETRICSW = std::mem::zeroed();
-        ncm.cbSize = std::mem::size_of::<NONCLIENTMETRICSW>() as u32;
-        let ok = SystemParametersInfoW(
-            SPI_GETNONCLIENTMETRICS,
-            ncm.cbSize,
-            Some(&mut ncm as *mut _ as *mut _),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        )
-        .is_ok();
-        if ok {
-            let f = CreateFontIndirectW(&ncm.lfMessageFont);
-            if !f.is_invalid() {
-                return (f, true);
-            }
-        }
-        (HFONT(GetStockObject(DEFAULT_GUI_FONT).0), false)
-    }
-}
-
-/// Wrapped height of `text` at `text_w` px in `font` (screen DC, discarded).
-fn fallback_text_h(font: HFONT, text: &str, text_w: i32) -> i32 {
-    use windows::Win32::Graphics::Gdi::{DrawTextW, GetDC, ReleaseDC, SelectObject, DT_CALCRECT};
-    unsafe {
-        let dc = GetDC(Some(NULL_HWND));
-        let old = SelectObject(dc, font.into());
-        let mut txt: Vec<u16> = text.encode_utf16().collect();
-        let mut rc = RECT { left: 0, top: 0, right: text_w, bottom: 0 };
-        DrawTextW(dc, &mut txt, &mut rc, DT_CALCRECT | DT_WORDBREAK | DT_LEFT | DT_NOPREFIX);
-        SelectObject(dc, old);
-        let _ = ReleaseDC(Some(NULL_HWND), dc);
-        (rc.bottom - rc.top).max(40)
-    }
-}
-
 /// Modal Yes/No + "don't ask again" checkbox for the engine-failure
 /// fallback. Hand-rolled (no .rc in this repo): popup window + STATIC +
 /// CHECKBOX + two buttons centered on the focus monitor (never the bezel
@@ -1408,9 +1368,10 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
         AdjustWindowRectEx, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BM_GETCHECK, BN_CLICKED, CreateWindowExW,
         DefWindowProcW, DispatchMessageW, GetMessageW,
         IsDialogMessageW, RegisterClassW, SetWindowLongPtrW, GetWindowLongPtrW,
-        ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_ID, GWLP_USERDATA,
+        ShowWindow, TranslateMessage, GWLP_ID, GWLP_USERDATA,
         IDCANCEL, IDOK, SW_SHOWNORMAL, WINDOW_STYLE, WM_CLOSE, WM_NCCREATE, WM_SETFONT,
-        WNDCLASSW, WS_CAPTION, WS_CHILD, WS_EX_DLGMODALFRAME, WS_POPUP,
+        WNDCLASSW, WNDCLASS_STYLES, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+        WS_EX_DLGMODALFRAME, WS_POPUP,
         WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
@@ -1462,7 +1423,9 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
             // Dialog-gray brush intentionally leaked (process-lifetime class).
             let bg = CreateSolidBrush(COLORREF(0xF0F0F0));
             let cls = WNDCLASSW {
-                style: CS_HREDRAW | CS_VREDRAW,
+                // No CS_HREDRAW|CS_VREDRAW (same drag-lag as the settings
+                // dialog): a move must bit-blt, not repaint all children.
+                style: WNDCLASS_STYLES(0),
                 lpfnWndProc: Some(dlg_proc),
                 hInstance: windows::Win32::Foundation::HINSTANCE(null_mut()),
                 hbrBackground: bg.into(),
@@ -1477,10 +1440,10 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
         // The frame is derived from the client rect: fixed W/H clipped the
         // buttons because the caption eats ~30px (see fallback_layout).
         let body = format!("本地翻译失败。\n是否用外部浏览器继续？\n\n选中文本将被发送到：{host}");
-        let (hfont, owned) = fallback_font();
-        let body_h = fallback_text_h(hfont, &body, FALLBACK_TEXT_W);
+        let (hfont, owned) = crate::settings::system_message_font();
+        let body_h = crate::settings::measure_text_h(hfont, &body, FALLBACK_TEXT_W);
         let (client_w, client_h, check_y, btn_y) = fallback_layout(body_h);
-        let style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+        let style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
         let mut frame = RECT { left: 0, top: 0, right: client_w, bottom: client_h };
         let _ = AdjustWindowRectEx(&mut frame, style, false, WS_EX_DLGMODALFRAME);
         let win_w = frame.right - frame.left;
@@ -2175,22 +2138,25 @@ fn popup_menu(st: &mut State) {
             return;
         }
         let has_sel = has_selection(st);
-        let _ = AppendMenuW(menu, menu_flags(has_sel), M_COPY_SEL, w!("复制选中文本"));
-        let _ = AppendMenuW(menu, MF_STRING, M_COPY_ALL, w!("复制全部文本"));
-        let _ = AppendMenuW(menu, menu_flags(!st.lines.is_empty()), M_SELECT_ALL, w!("全选"));
-        let _ = AppendMenuW(menu, menu_flags(has_sel), M_SEARCH, w!("浏览器搜索"));
+        let ui = crate::lang::resolve_ui_lang(Some(&st.ui_lang));
+        let mi = crate::settings::append_item;
+        mi(menu, menu_flags(has_sel), M_COPY_SEL, crate::lang::tr(ui, "menu.copy_sel"));
+        mi(menu, MF_STRING, M_COPY_ALL, crate::lang::tr(ui, "menu.copy_all"));
+        mi(menu, menu_flags(!st.lines.is_empty()), M_SELECT_ALL, crate::lang::tr(ui, "menu.select_all"));
+        mi(menu, menu_flags(has_sel), M_SEARCH, crate::lang::tr(ui, "menu.search"));
         if tr_busy(st) {
             // Cancel needs no selection: both rows cancel, always enabled.
-            let _ = AppendMenuW(menu, MF_STRING, M_TRANSLATE, w!("取消翻译"));
-            let _ = AppendMenuW(menu, MF_STRING, M_TRANSLATE_ALL, w!("取消翻译"));
+            mi(menu, MF_STRING, M_TRANSLATE, crate::lang::tr(ui, "menu.cancel_tr"));
+            mi(menu, MF_STRING, M_TRANSLATE_ALL, crate::lang::tr(ui, "menu.cancel_tr"));
         } else {
-            let _ = AppendMenuW(menu, menu_flags(has_sel), M_TRANSLATE, w!("翻译选中文本"));
-            let _ = AppendMenuW(menu, menu_flags(!st.lines.is_empty()), M_TRANSLATE_ALL, w!("翻译全部文本"));
+            mi(menu, menu_flags(has_sel), M_TRANSLATE, crate::lang::tr(ui, "menu.tr_sel"));
+            mi(menu, menu_flags(!st.lines.is_empty()), M_TRANSLATE_ALL, crate::lang::tr(ui, "menu.tr_all"));
         }
-        let _ = AppendMenuW(menu, MF_STRING, M_SAVE, w!("保存截图"));
-        let _ = AppendMenuW(menu, MF_STRING, M_SAVE_AS, w!("截图另存为…"));
-        let _ = AppendMenuW(menu, MF_STRING, M_ABOUT, w!("关于"));
-        let _ = AppendMenuW(menu, MF_STRING, M_CLOSE, w!("关闭"));
+        mi(menu, MF_STRING, M_SAVE, crate::lang::tr(ui, "menu.save"));
+        mi(menu, MF_STRING, M_SAVE_AS, crate::lang::tr(ui, "menu.save_as"));
+        mi(menu, MF_STRING, M_SETTINGS, crate::lang::tr(ui, "menu.settings"));
+        mi(menu, MF_STRING, M_ABOUT, crate::lang::tr(ui, "menu.about"));
+        mi(menu, MF_STRING, M_CLOSE, crate::lang::tr(ui, "menu.close"));
         let mut pt = POINT { x: 0, y: 0 };
         let _ = GetCursorPos(&mut pt);
         let _ = SetForegroundWindow(st.hwnd);
@@ -2230,6 +2196,7 @@ fn popup_menu(st: &mut State) {
             }
             M_SAVE => do_quick_save(st),
             M_SAVE_AS => do_save_as(st),
+            M_SETTINGS => open_settings(st),
             M_ABOUT => crate::about::show_about(st.hwnd),
             M_CLOSE => {
                 let _ = DestroyWindow(st.hwnd);
@@ -2244,6 +2211,22 @@ fn menu_flags(enabled: bool) -> MENU_ITEM_FLAGS {
         MF_STRING
     } else {
         MF_STRING | MF_GRAYED
+    }
+}
+
+/// Settings from the overlay menu: no live hotkey owner here (the tray owns
+/// registration), so hotkey/ui/OCR changes report restart notes via toast.
+fn open_settings(st: &mut State) {
+    let f = &st.focus;
+    let center = ((f.l + f.r) / 2, (f.t + f.b) / 2);
+    let o = crate::settings::run_settings(st.hwnd, center, None);
+    if !o.saved {
+        return;
+    }
+    if o.needs_restart {
+        show_toast(st, "设置已保存，部分生效需重启".to_string());
+    } else {
+        show_toast(st, "设置已保存".to_string());
     }
 }
 
@@ -2418,56 +2401,16 @@ fn url_host(url: &str) -> &str {
 }
 
 /// Set `key = value` under `[translate]`, preserving everything else
-/// (comments, order, other sections). Creates the file/section when missing.
-/// Line-based on purpose: no new deps, comments survive byte-for-byte.
+/// (comments, order, other sections). Thin wrapper over the generalized
+/// settings writer; the regression tests below pin the behavior.
 fn set_translate_key(src: &str, key: &str, value: &str) -> String {
-    let nl = if src.contains("\r\n") { "\r\n" } else { "\n" };
-    let mut lines: Vec<String> = if src.is_empty() { Vec::new() } else { src.split('\n').map(str::to_string).collect() };
-    // Strip a single trailing empty line; re-added at the end.
-    if lines.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
-        lines.pop();
-    }
-    let is_header = |l: &str| l.trim().starts_with('[');
-    let is_key = |l: &str| {
-        let t = l.trim_start();
-        !t.starts_with('#') && t.starts_with(key) && t[key.len()..].trim_start().starts_with('=')
-    };
-    let hdr = lines.iter().position(|l| l.trim() == "[translate]");
-    match hdr {
-        Some(h) => {
-            let end = lines.iter().skip(h + 1).position(|l| is_header(l)).map(|i| h + 1 + i).unwrap_or(lines.len());
-            if let Some(pos) = lines[h + 1..end].iter().position(|l| is_key(l)) {
-                lines[h + 1 + pos] = format!("{key} = {value}");
-            } else {
-                lines.insert(h + 1, format!("{key} = {value}"));
-            }
-        }
-        None => {
-            if !lines.is_empty() {
-                lines.push(String::new());
-            }
-            lines.push("[translate]".to_string());
-            lines.push(format!("{key} = {value}"));
-        }
-    }
-    lines.join(nl) + nl
+    crate::settings::set_section_key(src, "translate", key, value)
 }
 
 /// Where AppConfig::load reads from (exe dir first, then cwd); the same file
 /// is the write target so remembered choices actually reload.
 fn config_write_path() -> std::path::PathBuf {
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
-    if let Some(dir) = &exe_dir {
-        if dir.join("config.toml").is_file() {
-            return dir.join("config.toml");
-        }
-    }
-    if std::path::PathBuf::from("config.toml").is_file() {
-        return std::path::PathBuf::from("config.toml");
-    }
-    exe_dir.unwrap_or_else(|| std::path::PathBuf::from(".")).join("config.toml")
+    crate::settings::config_write_path()
 }
 
 /// Bergamot pair code to a BCP47 tag for external translator URLs
@@ -2545,7 +2488,7 @@ mod tests {
             bgra: Vec::new(), w: 0, h: 0, title: String::new(),
             search_url: String::new(), translate_url: String::new(), translate_mode: "bergamot".to_string(),
             external_auto_exit: true, external_fallback: false, external_fallback_ask: true,
-            save_dir: None,
+            save_dir: None, ui_lang: "auto".to_string(),
             hwnd: NULL_HWND, rx: std::ptr::null(),
             ready: false, load_error: None, lines: Vec::new(), tier: String::new(),
             spinner: 0, sel: None, press_at: None, anchor: None, cursor: None,

@@ -162,6 +162,146 @@ pub fn pair_for(src: &str, tgt: &str) -> Option<String> {
     }
 }
 
+// ---------------- UI language + string table (Settings §12.12) ----------------
+
+/// Effective UI language: explicit `en|zh` wins, `auto`/empty/unknown follows
+/// the system locale (zh* -> zh, everything else -> en). Never fails.
+pub fn resolve_ui_lang(configured: Option<&str>) -> &'static str {
+    match configured.map(str::trim) {
+        Some(s) if s.eq_ignore_ascii_case("zh") => "zh",
+        Some(s) if s.eq_ignore_ascii_case("en") => "en",
+        _ => {
+            if system_lang().starts_with("zh") {
+                "zh"
+            } else {
+                "en"
+            }
+        }
+    }
+}
+
+/// UI string lookup with fallback chain: requested lang -> English -> key.
+/// v1 covers menus + the settings dialog; toasts/about stay Chinese until
+/// the next pass (CHANGELOG). Unknown keys return the key itself so a
+/// missing entry is visible, never blank.
+pub fn tr(lang: &str, key: &str) -> &'static str {
+    let table: &[(&str, &str)] = if lang == "zh" { STR_ZH } else { STR_EN };
+    if let Some((_, v)) = table.iter().find(|(k, _)| *k == key) {
+        return v;
+    }
+    if lang != "en" {
+        if let Some((_, v)) = STR_EN.iter().find(|(k, _)| *k == key) {
+            return v;
+        }
+    }
+    // Static leak for unknown keys: cold path, keeps the signature simple.
+    Box::leak(key.to_string().into_boxed_str())
+}
+
+static STR_EN: &[(&str, &str)] = &[
+    ("menu.capture", "Capture text"),
+    ("menu.settings", "Settings"),
+    ("menu.about", "About"),
+    ("menu.quit", "Quit"),
+    ("menu.copy_sel", "Copy selected text"),
+    ("menu.copy_all", "Copy all text"),
+    ("menu.select_all", "Select all"),
+    ("menu.search", "Search in browser"),
+    ("menu.tr_sel", "Translate selected text"),
+    ("menu.tr_all", "Translate all text"),
+    ("menu.cancel_tr", "Cancel translation"),
+    ("menu.save", "Save screenshot"),
+    ("menu.save_as", "Save screenshot as…"),
+    ("menu.close", "Close"),
+    ("settings.title", "Settings"),
+    ("settings.translate", "Translation"),
+    ("settings.search", "Search"),
+    ("settings.save", "Save"),
+    ("settings.ocr", "OCR"),
+    ("settings.ui", "Interface"),
+    ("settings.hotkey", "Hotkey"),
+    ("settings.ok", "OK"),
+    ("settings.cancel", "Cancel"),
+    ("settings.change", "Change…"),
+    ("settings.press_key", "Press the new hotkey… (Esc cancels)"),
+    ("settings.source", "Translation engine"),
+    ("settings.srclang", "Source language"),
+    ("settings.tgtlang", "Target language"),
+    ("settings.exturl", "Translator URL"),
+    ("settings.autoexit", "Close overlay after opening browser"),
+    ("settings.fallback", "Auto-open browser on failure (no ask)"),
+    ("settings.fallbackask", "Ask before auto-opening browser"),
+    ("settings.engine", "Search engine"),
+    ("settings.engineurl", "Custom engine URL (empty = preset)"),
+    ("settings.savedir", "Screenshot folder (empty = default)"),
+    ("settings.model", "Model tier (empty = auto)"),
+    ("settings.cascade", "Cascade tiers (a,b,c)"),
+    ("settings.batch", "Recognition batch (1-64)"),
+    ("settings.directml", "Use DirectML GPU"),
+    ("settings.uilang", "Interface language"),
+    ("settings.hotkey_hint", "Bare PrintScreen / Win+Shift+S are owned by the system"),
+    ("settings.reserved", "That combo is owned by the system — press another"),
+    ("settings.taken", "That combo is already taken — press another"),
+    ("settings.invalid", "Invalid setting"),
+    ("settings.err_title", "Settings"),
+    ("need_http_text", "must be http(s) with {text}"),
+    ("need_tgt", "translator URL also needs {tgt}"),
+    ("bad_number", "must be a number 1-64"),
+    ("bad_choice", "unknown value"),
+];
+
+static STR_ZH: &[(&str, &str)] = &[
+    ("menu.capture", "截图取词"),
+    ("menu.settings", "设置"),
+    ("menu.about", "关于"),
+    ("menu.quit", "退出"),
+    ("menu.copy_sel", "复制选中文本"),
+    ("menu.copy_all", "复制全部文本"),
+    ("menu.select_all", "全选"),
+    ("menu.search", "浏览器搜索"),
+    ("menu.tr_sel", "翻译选中文本"),
+    ("menu.tr_all", "翻译全部文本"),
+    ("menu.cancel_tr", "取消翻译"),
+    ("menu.save", "保存截图"),
+    ("menu.save_as", "截图另存为…"),
+    ("menu.close", "关闭"),
+    ("settings.title", "设置"),
+    ("settings.translate", "翻译"),
+    ("settings.search", "搜索"),
+    ("settings.save", "保存"),
+    ("settings.ocr", "OCR"),
+    ("settings.ui", "界面"),
+    ("settings.hotkey", "热键"),
+    ("settings.ok", "确定"),
+    ("settings.cancel", "取消"),
+    ("settings.change", "更改…"),
+    ("settings.press_key", "按下新热键…（Esc 取消）"),
+    ("settings.source", "翻译引擎"),
+    ("settings.srclang", "源语言"),
+    ("settings.tgtlang", "目标语言"),
+    ("settings.exturl", "翻译网址"),
+    ("settings.autoexit", "打开浏览器后关闭全屏"),
+    ("settings.fallback", "失败时自动用浏览器（不问）"),
+    ("settings.fallbackask", "自动用浏览器前先问"),
+    ("settings.engine", "搜索引擎"),
+    ("settings.engineurl", "自定义搜索网址（空=预设）"),
+    ("settings.savedir", "截图目录（空=默认）"),
+    ("settings.model", "模型档（空=自动）"),
+    ("settings.cascade", "级联档（a,b,c）"),
+    ("settings.batch", "识别批大小（1-64）"),
+    ("settings.directml", "使用 DirectML 显卡"),
+    ("settings.uilang", "界面语言"),
+    ("settings.hotkey_hint", "裸 PrintScreen / Win+Shift+S 系统占用"),
+    ("settings.reserved", "该组合系统占用，换一个"),
+    ("settings.taken", "该组合已被占用，换一个"),
+    ("settings.invalid", "设置无效"),
+    ("settings.err_title", "设置"),
+    ("need_http_text", "须是 http(s) 且含 {text}"),
+    ("need_tgt", "翻译网址还须含 {tgt}"),
+    ("bad_number", "须是数字 1-64"),
+    ("bad_choice", "未知取值"),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +327,27 @@ mod tests {
         assert_eq!(pair_for("zh", "en"), Some("zhen".to_string()));
         assert_eq!(pair_for("en", "EN"), None);
         assert_eq!(pair_for("zh", "zh"), None);
+    }
+
+    #[test]
+    fn ui_lang_resolution() {
+        assert_eq!(resolve_ui_lang(Some("zh")), "zh");
+        assert_eq!(resolve_ui_lang(Some("EN")), "en");
+        // auto/empty/garbage follows the system locale (zh* -> zh).
+        for cfg in [None, Some("auto"), Some(""), Some("xx")] {
+            let got = resolve_ui_lang(cfg);
+            assert!(got == "zh" || got == "en", "got {got}");
+            assert_eq!(got, if system_lang().starts_with("zh") { "zh" } else { "en" });
+        }
+    }
+
+    #[test]
+    fn ui_strings_fall_back() {
+        assert_eq!(tr("zh", "menu.settings"), "设置");
+        assert_eq!(tr("en", "menu.settings"), "Settings");
+        // Unknown lang behaves like English; unknown key echoes itself.
+        assert_eq!(tr("fr", "menu.settings"), "Settings");
+        assert_eq!(tr("zh", "no.such.key"), "no.such.key");
     }
 
     #[test]

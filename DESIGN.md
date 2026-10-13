@@ -387,4 +387,40 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
 - **UI internationalization (i18n)**: every app string (menus/buttons/toasts/
   dialogs) goes through a string table, `config.toml [ui] lang` picks the UI
   language (default `auto` follows the system locale), English + Chinese
-  tables first, lookup with a fallback chain.
+  tables first, lookup with a fallback chain. v1 table ships with Settings
+  (§12.12); `auto` resolves via the same `system_lang()` the translator uses.
+
+### 12.12 Settings dialog (done, v1 scope)
+
+- **Goal**: every `config.toml` key editable in-GUI; no hand-editing needed.
+  Single dialog implementation, two entries: tray right-click menu + overlay
+  right-click menu (`设置`). Reuses the fallback-dialog patterns (system
+  `lfMessageFont` via `WM_SETFONT`, `DT_CALCRECT` + `AdjustWindowRectEx`
+  measured frame).
+- **Coverage**: `[hotkey] combos` (v1 placeholder, see below), `[ocr]
+  model/cascade/rec_batch_size/use_directml`, `[translate]
+  source/external_url/external_auto_exit/external_fallback/
+  external_fallback_ask/source_lang/target_lang`, `[search]
+  engine/engine_url`, `[save] dir`, `[ui] lang` (new: `auto|en|zh`,
+  default `auto`).
+- **Persistence**: generalize the line-preserving `set_translate_key`
+  writer to all sections (comments survive); unknown/malformed values fall
+  back to defaults per the existing `normalize_*` pattern, never brick
+  startup. Hotkey + ui-lang apply rules below.
+- **Hotkey v1 (placeholder)**: capture box records `WM_KEYDOWN` (VK +
+  modifiers) without any hook; display name via `GetKeyNameTextW`
+  (locale-aware, no hand-kept table) with `0xNN` fallback when unnamed.
+  Validation: only combos `RegisterHotKey` can take are accepted
+  (modifier + single VK); bare `PrintScreen` / `Win+Shift+S` are
+  system-reserved and rejected with a message until the `WH_KEYBOARD_LL`
+  fallback exists. Apply = unregister + re-register live on the tray
+  window; conflict keeps the old combo and reports. `AppConfig.combos`
+  (`Vec`, already parsed) is the model; tray re-reads it on apply.
+- **UI language v1**: restart-apply (tray quit + relaunch). Menus already
+  rebuild on popup; dialog statics rebuild on reopen; toasts read the table
+  at fire time.
+- **Tests**: pure writer/validation roundtrips (extend the
+  `translate_key_roundtrips` pattern), VK-name mapping table test,
+  layout-fits test (extend `fallback_layout_buttons_fit_client` pattern);
+  `--settings-test` harness shows the dialog standalone like
+  `--dialog-test`.

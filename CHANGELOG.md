@@ -24,3 +24,16 @@
 - Fallback consent dialog now uses the system message font (same as Notepad)
   and measures the frame from the wrapped body text, so Yes/No buttons are
   never clipped regardless of host length.
+
+### Added
+- Settings dialog (tray menu + overlay menu): every `config.toml` key is
+  GUI-editable (hotkey with key-capture box, OCR tier/cascade/batch/GPU,
+  translate engine + languages + URL + auto-exit/fallback switches, search
+  engine + custom URL, save folder); writes preserve comments, invalid
+  values are rejected with a message and never brick startup. Hotkey
+  re-registers live from the tray (restart-note from the overlay);
+  OCR/ui-language changes need a restart. System-reserved combos
+  (bare PrintScreen, Win+Shift+S) are refused.
+- `[ui] lang = auto|zh|en` (default `auto` = system locale): tray + overlay
+  menus and the settings dialog follow it (restart to apply). Toasts/about
+  stay Chinese until the next i18n pass.

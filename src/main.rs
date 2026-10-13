@@ -14,6 +14,7 @@ mod monitors;
 mod ocr;
 mod overlay;
 mod search;
+mod settings;
 mod tray;
 mod translate;
 mod worker;
@@ -34,6 +35,9 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--dialog-test") {
         return overlay::run_dialog_test();
+    }
+    if args.iter().any(|a| a == "--settings-test") {
+        return settings::run_settings_test();
     }
     let once = args.iter().any(|a| a == "--once");
     let show_ui = args.iter().any(|a| a == "--overlay");
@@ -98,6 +102,7 @@ pub(crate) fn capture_and_show(
         translate_source: cfg.translate_source.clone(),
         translate_target: cfg.translate_target.clone(),
         save_dir: cfg.save_dir.clone(),
+        ui_lang: cfg.ui_lang.clone(),
     };
     match autoclose_ms {
         Some(ms) => overlay::show_overlay_autoclose(req, &worker.rx, ms),

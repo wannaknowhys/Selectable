@@ -6,23 +6,25 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 #[derive(Debug, Deserialize, Default)]
-struct FileConfig {
+pub(crate) struct FileConfig {
     #[serde(default)]
-    hotkey: HotkeySection,
+    pub(crate) hotkey: HotkeySection,
     #[serde(default)]
-    ocr: OcrSection,
+    pub(crate) ocr: OcrSection,
     #[serde(default)]
-    search: SearchSection,
+    pub(crate) search: SearchSection,
     #[serde(default)]
-    translate: TranslateSection,
+    pub(crate) translate: TranslateSection,
     #[serde(default)]
-    save: SaveSection,
+    pub(crate) save: SaveSection,
+    #[serde(default)]
+    pub(crate) ui: UiSection,
 }
 
 #[derive(Debug, Deserialize)]
-struct HotkeySection {
+pub(crate) struct HotkeySection {
     #[serde(default = "default_combos")]
-    combos: Vec<String>,
+    pub(crate) combos: Vec<String>,
 }
 
 impl Default for HotkeySection {
@@ -39,15 +41,15 @@ fn default_combos() -> Vec<String> {
 /// fields (cascade/batch/directml) with empty/zero/false whenever the whole
 /// [ocr] section is absent from config.toml, silently bricking OCR startup.
 #[derive(Debug, Deserialize)]
-struct OcrSection {
+pub(crate) struct OcrSection {
     #[serde(default)]
-    model: Option<String>,
+    pub(crate) model: Option<String>,
     #[serde(default = "default_cascade")]
-    cascade: Vec<String>,
+    pub(crate) cascade: Vec<String>,
     #[serde(default = "default_batch")]
-    rec_batch_size: usize,
+    pub(crate) rec_batch_size: usize,
     #[serde(default = "default_true")]
-    use_directml: bool,
+    pub(crate) use_directml: bool,
 }
 
 impl Default for OcrSection {
@@ -74,12 +76,12 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Deserialize)]
-struct SearchSection {
+pub(crate) struct SearchSection {
     /// Preset name (see search::PRESETS); explicit engine_url wins when set.
     #[serde(default = "default_search_engine")]
-    engine: String,
+    pub(crate) engine: String,
     #[serde(default)]
-    engine_url: Option<String>,
+    pub(crate) engine_url: Option<String>,
 }
 
 impl Default for SearchSection {
@@ -97,33 +99,33 @@ fn default_search_url() -> String {
 }
 
 #[derive(Debug, Deserialize)]
-struct TranslateSection {
+pub(crate) struct TranslateSection {
     /// Engine switch (single dispatch): bergamot (offline, default) |
     /// external (always browser) | online (not wired yet; falls back).
     #[serde(default = "default_source_mode")]
-    source: String,
+    pub(crate) source: String,
     #[serde(default = "default_translate_url")]
-    external_url: String,
+    pub(crate) external_url: String,
     /// Exit the overlay after any external browser launch (search + the
     /// translate failure/unsupported fallbacks). The fullscreen cover would
     /// otherwise hide the just-opened browser.
     #[serde(default = "default_true")]
-    external_auto_exit: bool,
+    pub(crate) external_auto_exit: bool,
     /// Auto-open the browser on engine failure / unsupported pairs WITHOUT
     /// asking. Default off (privacy: no user string leaves the machine
     /// without explicit consent; explicit clicks and source=external bypass).
     #[serde(default)]
-    external_fallback: bool,
+    pub(crate) external_fallback: bool,
     /// Ask before the fallback above (NO = one-shot toast). The dialog's
     /// "don't ask again" persists the choice back to config.toml.
     #[serde(default = "default_true")]
-    external_fallback_ask: bool,
+    pub(crate) external_fallback_ask: bool,
     /// Source language override ("auto" = detect per trigger).
     #[serde(default = "default_auto")]
-    source_lang: String,
+    pub(crate) source_lang: String,
     /// Target language ("auto" = follow system locale).
     #[serde(default = "default_auto")]
-    target_lang: String,
+    pub(crate) target_lang: String,
 }
 
 impl Default for TranslateSection {
@@ -163,9 +165,22 @@ fn default_translate_url() -> String {
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct SaveSection {
+pub(crate) struct SaveSection {
     #[serde(default)]
-    dir: Option<String>,
+    pub(crate) dir: Option<String>,
+}
+
+/// UI language override ("auto" = follow system locale).
+#[derive(Debug, Deserialize)]
+pub(crate) struct UiSection {
+    #[serde(default = "default_auto")]
+    pub(crate) lang: String,
+}
+
+impl Default for UiSection {
+    fn default() -> Self {
+        Self { lang: default_auto() }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +201,7 @@ pub struct AppConfig {
     pub translate_source: String,
     pub translate_target: String,
     pub save_dir: Option<String>,
+    pub ui_lang: String,
 }
 
 impl AppConfig {
@@ -216,6 +232,7 @@ impl AppConfig {
                     translate_source: fc.translate.source_lang,
                     translate_target: fc.translate.target_lang,
                     save_dir: fc.save.dir,
+                    ui_lang: fc.ui.lang,
                 });
             }
         }
@@ -234,6 +251,7 @@ impl AppConfig {
             translate_source: default_auto(),
             translate_target: default_auto(),
             save_dir: None,
+            ui_lang: default_auto(),
         })
     }
 }

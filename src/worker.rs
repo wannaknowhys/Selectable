@@ -108,6 +108,7 @@ mod tests {
             translate_source: "auto".to_string(),
             translate_target: "auto".to_string(),
             save_dir: None,
+            ui_lang: "auto".to_string(),
         });
         let w = OcrWorker::spawn(&cfg);
         w.submit(RgbImage::from_pixel(64, 64, image::Rgb([255, 255, 255])));
