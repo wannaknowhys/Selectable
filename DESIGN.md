@@ -424,3 +424,11 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   layout-fits test (extend `fallback_layout_buttons_fit_client` pattern);
   `--settings-test` harness shows the dialog standalone like
   `--dialog-test`.
+- **Owned caption drag**: both dialogs (`Settings`, fallback consent) own
+  the caption drag (`WM_NCLBUTTONDOWN` on `HTCAPTION` + capture; each move
+  applies the latest cursor position, then `DwmFlush()` blocks until the
+  next DWM composition, so at most one submit per frame) instead of the
+  system move loop, which replays every mouse report synchronously and
+  trails the cursor at 1000Hz+ report rates. Dialogs are not resizable, so
+  losing Aero Snap costs nothing. Validated with a plain-C replica
+  (`temp/dragtest`, gitignored) before porting.

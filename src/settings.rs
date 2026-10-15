@@ -16,23 +16,29 @@ use windows::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{CreateSolidBrush, DeleteObject, HFONT},
         UI::{
-            Input::KeyboardAndMouse::{EnableWindow, SetFocus, VK_ESCAPE},
+            Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_ESCAPE},
             WindowsAndMessaging::{
                 AdjustWindowRectEx, AppendMenuW, BN_CLICKED, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON,
                 BM_GETCHECK, BM_SETCHECK, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST,
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GetMessageW, GetWindowLongPtrW, GetWindowTextW, IsDialogMessageW, LoadCursorW, MessageBoxW, MB_OK,
-                MB_ICONEXCLAMATION, RegisterClassW, SendMessageW, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage,
-                GWLP_ID, GWLP_USERDATA, HMENU, IDCANCEL, IDOK, MENU_ITEM_FLAGS,
-                MSG, SW_SHOWNORMAL, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_KEYDOWN,
-                WM_NCCREATE, WM_SETFONT, WNDCLASSW, WNDCLASS_STYLES, WS_BORDER, WS_CAPTION, WS_CHILD,
+                GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
+                IsDialogMessageW, LoadCursorW, MessageBoxW, MB_OK,
+                MB_ICONEXCLAMATION, RegisterClassW, SendMessageW,
+                SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+                TranslateMessage,
+                GWLP_ID, GWLP_USERDATA, HMENU, HTCAPTION, IDCANCEL, IDOK, MENU_ITEM_FLAGS,
+                MSG, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+                SW_SHOWNORMAL, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_KEYDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCLBUTTONDOWN, WM_SETFONT,
+                WNDCLASSW, WNDCLASS_STYLES, WS_BORDER, WS_CAPTION, WS_CHILD,
                 WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
                 WS_EX_DLGMODALFRAME, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, ES_AUTOHSCROLL,
             },
         },
     },
 };
+
+use windows::Win32::Foundation::POINT;
 
 use crate::{
     config::FileConfig,
@@ -320,6 +326,7 @@ struct Dlg {
     ctrls: Ctrls,
     ui: &'static str,
     capturing: bool,
+    drag: SysDrag,
     pending_hotkey: Option<hotkey::Hotkey>,
     orig_combo: String,
     orig_ui_lang: String,
@@ -481,6 +488,122 @@ fn is_checked(hwnd: HWND) -> bool {
     unsafe { SendMessageW(hwnd, BM_GETCHECK, None, None).0 == 1 }
 }
 
+// ---------------- owned caption drag (also used by overlay) ----------------
+
+/// Virtual screen (x, y, w, h) in physical pixels.
+pub(crate) fn virtual_screen() -> (i32, i32, i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
+    };
+    unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    }
+}
+
+/// Owned caption drag (replaces the system move loop).
+///
+/// Why: the system move loop repositions the window once per mouse report,
+/// synchronously. At 1000Hz+ report rates the queue never drains and the
+/// window visibly trails the cursor ("replays" every queued position).
+/// Owning the drag lets each frame collapse to the LATEST cursor position:
+/// DwmFlush() blocks until the next DWM composition, so at most one submit
+/// happens per frame and backlog is impossible by construction. Our dialogs
+/// are not resizable (no THICKFRAME/MAXIMIZEBOX), so losing Aero Snap costs
+/// nothing. Validated with a plain-C replica (temp/dragtest) before porting.
+#[derive(Debug, Default)]
+pub(crate) struct SysDrag {
+    pub(crate) active: bool,
+    start_cur: (i32, i32),
+    start_rect: RECT,
+}
+
+impl SysDrag {
+    /// WM_NCLBUTTONDOWN on HTCAPTION: capture and take over the gesture.
+    pub fn begin(&mut self, hwnd: HWND) {
+        unsafe {
+            let mut pt = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut pt).is_err() {
+                return;
+            }
+            let mut rc: RECT = std::mem::zeroed();
+            if GetWindowRect(hwnd, &mut rc).is_err() {
+                return;
+            }
+            let _ = SetCapture(hwnd);
+            self.active = true;
+            self.start_cur = (pt.x, pt.y);
+            self.start_rect = rc;
+        }
+    }
+
+    /// WM_MOUSEMOVE while active: apply the latest cursor position, then
+    /// throttle to the compositor rate (at most one submit per frame).
+    /// Posted mouse moves are already coalesced to the latest, so no
+    /// explicit queue draining is needed.
+    pub fn on_move(&mut self, hwnd: HWND) {
+        if !self.active {
+            return;
+        }
+        unsafe {
+            let mut pt = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut pt).is_err() {
+                return;
+            }
+            let (vx, vy, vw, vh) = virtual_screen();
+            let w = self.start_rect.right - self.start_rect.left;
+            let h = self.start_rect.bottom - self.start_rect.top;
+            let x = (self.start_rect.left + pt.x - self.start_cur.0)
+                .clamp(vx, (vx + vw - w).max(vx));
+            let y = (self.start_rect.top + pt.y - self.start_cur.1)
+                .clamp(vy, (vy + vh - h).max(vy));
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            // Throttle: block until the next DWM composition finishes.
+            let _ = windows::Win32::Graphics::Dwm::DwmFlush();
+        }
+    }
+
+    pub fn end(&mut self) {
+        self.active = false;
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+    }
+
+    /// Esc while dragging: snap back to the grab position, stay open.
+    pub fn cancel(&mut self, hwnd: HWND) {
+        if !self.active {
+            return;
+        }
+        let rc = self.start_rect;
+        self.end();
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                rc.left,
+                rc.top,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
 unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     use windows::Win32::UI::WindowsAndMessaging::CREATESTRUCTW;
     if msg == WM_NCCREATE {
@@ -494,6 +617,24 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
     }
     let d = &mut *ptr;
     match msg {
+        // Owned caption drag (see SysDrag): only HTCAPTION is intercepted,
+        // so the close button and system menu keep the default behavior.
+        WM_NCLBUTTONDOWN if wp.0 == HTCAPTION as usize => {
+            d.drag.begin(hwnd);
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE if d.drag.active => {
+            d.drag.on_move(hwnd);
+            LRESULT(0)
+        }
+        WM_LBUTTONUP if d.drag.active => {
+            d.drag.end();
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED if d.drag.active => {
+            d.drag.active = false;
+            LRESULT(0)
+        }
         WM_KEYDOWN if d.capturing => {
             // Capture mode owns every key (the modal loop bypasses
             // IsDialogMessageW for WM_KEYDOWN while capturing).
@@ -527,7 +668,9 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 let _ = SetFocus(Some(hwnd));
                 LRESULT(0)
             } else if code == BN_CLICKED && id == IDOK.0 as usize {
-                if d.capturing {
+                if d.drag.active {
+                    d.drag.end(); // Enter mid-drag: drop here, stay open.
+                } else if d.capturing {
                     end_capture(d, false); // OK while capturing: stop capture, stay open.
                 } else if apply_settings(hwnd, d) {
                     d.out.saved = true;
@@ -535,7 +678,9 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 }
                 LRESULT(0)
             } else if code == BN_CLICKED && id == IDCANCEL.0 as usize {
-                if d.capturing {
+                if d.drag.active {
+                    d.drag.cancel(hwnd); // Esc mid-drag: snap back, stay open.
+                } else if d.capturing {
                     end_capture(d, false); // Esc-equivalent: stop capture, stay open.
                 } else {
                     d.done = true;
@@ -819,6 +964,7 @@ unsafe fn run_settings_inner(
         },
         ui,
         capturing: false,
+        drag: SysDrag::default(),
         pending_hotkey: None,
         orig_combo: orig_combo.to_string(),
         orig_ui_lang: fc.ui.lang.clone(),
@@ -1009,9 +1155,13 @@ unsafe fn run_settings_inner(
         ocr_changed: (*ptr).out.ocr_changed,
         needs_restart: (*ptr).out.needs_restart,
     };
+    // Teardown order matters: DestroyWindow sends WM_DESTROY/WM_NCDESTROY
+    // through dlg_proc, which derefs GWLP_USERDATA. Freeing the Box first
+    // leaves a dangling pointer (UB). Clear the slot, destroy, then release.
+    SetWindowLongPtrW(dlg, GWLP_USERDATA, 0);
+    let _ = DestroyWindow(dlg);
     drop(Box::from_raw(ptr));
     std::mem::forget(state); // else the original Box double-frees (heap corruption).
-    let _ = DestroyWindow(dlg);
     if owned {
         let _ = DeleteObject(hfont.into());
     }

@@ -24,6 +24,9 @@
 - Fallback consent dialog now uses the system message font (same as Notepad)
   and measures the frame from the wrapped body text, so Yes/No buttons are
   never clipped regardless of host length.
+- Settings + fallback dialogs own the caption drag (queued moves collapse to
+  the latest position) instead of the system move loop, so the window tracks
+  the cursor at 1000Hz+ mouse report rates instead of trailing behind.
 
 ### Added
 - Settings dialog (tray menu + overlay menu): every `config.toml` key is

@@ -382,3 +382,9 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
   模式）、VK 显示名映射表测试、布局不裁剪测试（沿
   `fallback_layout_buttons_fit_client` 模式）；`--settings-test` 独立入口
   像 `--dialog-test` 一样单显对话框。
+- **自研标题栏拖动**：两个对话框（设置框、fallback 确认框）自己接管标题栏
+  拖动（`WM_NCLBUTTONDOWN` 判 `HTCAPTION` + capture；每次移动用最新光标
+  位置，然后 `DwmFlush()` 等到下一次 DWM 合成，每帧最多提交一次），不用
+  系统 move loop——系统 loop 每个鼠标回报都同步搬一次窗，1000Hz+ 回报率
+  下必然积压、窗口拖尾。对话框不可缩放，丢 Aero Snap 无代价。port 之前
+  先用纯 C 复刻版（`temp/dragtest`，gitignored）验证过。

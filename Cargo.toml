@@ -15,6 +15,7 @@ ort = { version = "=2.0.0-rc.13", features = ["directml", "ndarray"] }
 ndarray = "0.17"
 windows = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_UI_HiDpi",
   "Win32_UI_Shell",

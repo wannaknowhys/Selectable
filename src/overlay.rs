@@ -1368,8 +1368,9 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
         AdjustWindowRectEx, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BM_GETCHECK, BN_CLICKED, CreateWindowExW,
         DefWindowProcW, DispatchMessageW, GetMessageW,
         IsDialogMessageW, RegisterClassW, SetWindowLongPtrW, GetWindowLongPtrW,
-        ShowWindow, TranslateMessage, GWLP_ID, GWLP_USERDATA,
-        IDCANCEL, IDOK, SW_SHOWNORMAL, WINDOW_STYLE, WM_CLOSE, WM_NCCREATE, WM_SETFONT,
+        ShowWindow, TranslateMessage, GWLP_ID, GWLP_USERDATA, HTCAPTION,
+        IDCANCEL, IDOK, SW_SHOWNORMAL, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CLOSE, WM_LBUTTONUP,
+        WM_MOUSEMOVE, WM_NCCREATE, WM_NCLBUTTONDOWN, WM_SETFONT,
         WNDCLASSW, WNDCLASS_STYLES, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
         WS_EX_DLGMODALFRAME, WS_POPUP,
         WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
@@ -1382,6 +1383,7 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
         open: bool,
         remember: bool,
         done: bool,
+        drag: crate::settings::SysDrag,
     }
 
     unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -1397,14 +1399,42 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
         }
         let d = &mut *ptr;
         match msg {
+            // Owned caption drag (same fix as the settings dialog: the system
+            // move loop replays every mouse report at high report rates).
+            WM_NCLBUTTONDOWN if wp.0 == HTCAPTION as usize => {
+                d.drag.begin(hwnd);
+                LRESULT(0)
+            }
+            WM_MOUSEMOVE if d.drag.active => {
+                d.drag.on_move(hwnd);
+                LRESULT(0)
+            }
+            WM_LBUTTONUP if d.drag.active => {
+                d.drag.end();
+                LRESULT(0)
+            }
+            WM_CAPTURECHANGED if d.drag.active => {
+                d.drag.active = false;
+                LRESULT(0)
+            }
             WM_COMMAND => {
                 let id = (wp.0 & 0xffff) as u32;
                 let code = ((wp.0 >> 16) & 0xffff) as u32;
                 if code == BN_CLICKED && (id == IDOK.0 as u32 || id == IDCANCEL.0 as u32) {
-                    d.open = id == IDOK.0 as u32;
-                    d.remember = SendMessageW(d.check, BM_GETCHECK, None, None).0 == 1; // BST_CHECKED
-                    d.done = true;
-                    LRESULT(0)
+                    if d.drag.active {
+                        // Enter/Esc mid-drag: drop/snap back, stay open.
+                        if id == IDCANCEL.0 as u32 {
+                            d.drag.cancel(hwnd);
+                        } else {
+                            d.drag.end();
+                        }
+                        LRESULT(0)
+                    } else {
+                        d.open = id == IDOK.0 as u32;
+                        d.remember = SendMessageW(d.check, BM_GETCHECK, None, None).0 == 1; // BST_CHECKED
+                        d.done = true;
+                        LRESULT(0)
+                    }
                 } else {
                     DefWindowProcW(hwnd, msg, wp, lp)
                 }
@@ -1449,7 +1479,7 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
         let win_w = frame.right - frame.left;
         let win_h = frame.bottom - frame.top;
         let (cx, cy) = center;
-        let mut state = Box::new(Dlg { check: NULL_HWND, open: false, remember: false, done: false });
+        let mut state = Box::new(Dlg { check: NULL_HWND, open: false, remember: false, done: false, drag: crate::settings::SysDrag::default() });
         let ptr = state.as_mut() as *mut Dlg;
         let dlg = CreateWindowExW(
             WS_EX_DLGMODALFRAME,
@@ -1549,9 +1579,12 @@ fn ask_external_fallback(owner: HWND, host: &str, center: (i32, i32)) -> Fallbac
             DispatchMessageW(&msg);
         }
         let choice = FallbackChoice { open: (*ptr).open, remember: (*ptr).remember };
+        // Same teardown order as settings: clear USERDATA before DestroyWindow
+        // so WM_DESTROY/WM_NCDESTROY never derefs a freed Box (UB).
+        SetWindowLongPtrW(dlg, GWLP_USERDATA, 0);
+        let _ = DestroyWindow(dlg);
         drop(Box::from_raw(ptr));
         std::mem::forget(state);
-        let _ = DestroyWindow(dlg);
         if owned {
             let _ = DeleteObject(hfont.into());
         }
