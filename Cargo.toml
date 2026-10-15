@@ -39,7 +39,7 @@ flate2 = "1"
 sha2 = "0.10"
 # Only the codecs we ship (PNG now, JPEG with the save-as todo).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-imageproc = "0.25"
+imageproc = { version = "0.25", default-features = false }
 
 [dev-dependencies]
 ab_glyph = "0.2"
