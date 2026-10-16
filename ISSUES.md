@@ -89,31 +89,40 @@
   same line-preserving writer + validation underneath.
 - **Status**: unscheduled. Open: tab list = config sections (confirm).
 
-## #9 Online translation provider (todo, needs decision)
+## #9 Online translation provider (decided: configurable templates)
 
 - **Content**: `[translate] source = "online"` currently falls back to local with
-  a notice. Needs: provider choice, key storage (local config, never in git),
-  per-call privacy consent UX.
-- **Status**: awaiting decisions (provider? key management?).
+  a notice.
+- **Decision (user)**: online endpoints are **configurable URL templates**:
+  several built-in, user can add new ones, and can partially modify based on
+  a built-in template (same pattern as the `[search] engine` presets).
+- **Status**: design locked, unscheduled.
 
-## #10 Hotkeys: LL-hook fallback + remapping scope (todo, needs scope)
+## #10 Hotkeys: LL-hook fallback + remapping scope (deferred)
 
 - **Content**: bare PrintScreen is owned by the Win11 Snipping Tool and
   `Win+Shift+S` by Explorer; covering them needs a `WH_KEYBOARD_LL` hook
   fallback (Flameshot approach, no admin). The settings hotkey box is a v1
   placeholder (single combo; conflict keeps the old combo).
-- **Status**: awaiting scope (hook fallback? multi-combo remapping? both?).
+- **Decision (user)**: both stay in the backlog, neither starts now.
+- **Note**: the LL hook does **not** need admin rights and no manifest change
+  is required for it (recorded here per the manifest question). Known limit:
+  UIPI — the hook can't see keys typed into elevated windows unless our
+  process is elevated too; document it when the fallback lands.
+- **Status**: deferred.
 
-## #11 App/tray icon (todo, needs art + scope)
+## #11 App/tray icon (me to draft 4–5 proposals)
 
 - **Content**: exe + tray icon are still stock. Needs: `.ico` art source, embed
   at build time, tray `NOTIFYICONDATAW` picks it up.
-- **Status**: awaiting art (who provides the ICO?) + scope (exe only, or tray too?).
+- **Decision (user)**: I draft 4–5 icon proposals, user picks (may also ask
+  other LLMs for competing drafts).
+- **Status**: drafting next.
 
-## #12 GPU/VRAM: unload idle models (todo, needs data)
+## #12 GPU/VRAM: unload mode setting (decided: auto/manual switch)
 
-- **Content**: ORT sessions (+ DirectML) stay resident; on low-VRAM machines this
-  pins memory. Candidate shapes: idle-timeout auto-unload, manual
-  load/unload switch, per-tier GPU off.
-- **Status**: awaiting data (observed VRAM? auto-unload after N idle minutes,
-  or a switch?).
+- **Content**: ORT sessions (+ DirectML) stay resident; observed VRAM is **1GB+**.
+- **Decision (user)**: a setting controls the unload mode — **auto** (idle
+  timeout unloads, next use reloads) or **manual** (tray switch). Timeout
+  minutes + exact setting shape TBD at implementation.
+- **Status**: design locked, unscheduled.
