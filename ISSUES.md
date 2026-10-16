@@ -61,3 +61,59 @@
   (`CommDlgExtendedError` + toast). Verified on-device: dialog shows, cancel
   is silent (no toast), successful save toasts.
 - **Status**: closed.
+
+## Backlog (new, ordered roughly by dependency)
+
+## #6 CI release pipeline (todo)
+
+- **Content**: tag-triggered releases from `.github/workflows` (missing entirely):
+  6 zips (binary, binary+small, binary+medium, small, medium, translate-models
+  enzh+zhen) + `SHA256SUMS`. CI only calls xtask (`build-translate` →
+  `dist --release-only --tier all`); translation models fetched inside CI for
+  the 6th zip. `windows-latest` only; version single-sourced from `Cargo.toml`.
+- **Status**: not started (DESIGN §12.9 step 8).
+
+## #7 Full UI i18n (deferred, after CI)
+
+- **Content**: every app string (menus/buttons/toasts/dialogs) through a string
+  table; `config.toml [ui] lang` picks the UI language (default `auto` follows
+  the system locale); English + Chinese tables first, lookup with fallback chain.
+  Today only tray/overlay menus + settings dialog follow `[ui] lang`;
+  toasts/about stay Chinese.
+- **Status**: deferred (DESIGN §12.11).
+
+## #8 Settings dialog tabs (todo)
+
+- **Content**: the single settings dialog is getting crowded. Group keys into
+  tabs (Hotkey / OCR / Translate / Search / Save / Interface) via a Tab control;
+  same line-preserving writer + validation underneath.
+- **Status**: unscheduled. Open: tab list = config sections (confirm).
+
+## #9 Online translation provider (todo, needs decision)
+
+- **Content**: `[translate] source = "online"` currently falls back to local with
+  a notice. Needs: provider choice, key storage (local config, never in git),
+  per-call privacy consent UX.
+- **Status**: awaiting decisions (provider? key management?).
+
+## #10 Hotkeys: LL-hook fallback + remapping scope (todo, needs scope)
+
+- **Content**: bare PrintScreen is owned by the Win11 Snipping Tool and
+  `Win+Shift+S` by Explorer; covering them needs a `WH_KEYBOARD_LL` hook
+  fallback (Flameshot approach, no admin). The settings hotkey box is a v1
+  placeholder (single combo; conflict keeps the old combo).
+- **Status**: awaiting scope (hook fallback? multi-combo remapping? both?).
+
+## #11 App/tray icon (todo, needs art + scope)
+
+- **Content**: exe + tray icon are still stock. Needs: `.ico` art source, embed
+  at build time, tray `NOTIFYICONDATAW` picks it up.
+- **Status**: awaiting art (who provides the ICO?) + scope (exe only, or tray too?).
+
+## #12 GPU/VRAM: unload idle models (todo, needs data)
+
+- **Content**: ORT sessions (+ DirectML) stay resident; on low-VRAM machines this
+  pins memory. Candidate shapes: idle-timeout auto-unload, manual
+  load/unload switch, per-tier GPU off.
+- **Status**: awaiting data (observed VRAM? auto-unload after N idle minutes,
+  or a switch?).

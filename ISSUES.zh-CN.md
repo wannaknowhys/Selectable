@@ -52,3 +52,53 @@
   `CommDlgExtendedError` 报码+toast），真机确认：对话框正常弹出，取消无 toast，
   保存成功有 toast。
 - **状态**：已关闭。
+
+## 待办（新增，大致按依赖排序）
+
+## #6 CI 发版流水线（todo）
+
+- **内容**：`v*` tag 触发 `.github/workflows` 发版（现在整个目录缺失）：
+  6 个 zip（binary、binary+small、binary+medium、small、medium、translate-models
+  enzh+zhen）+ `SHA256SUMS`。CI 只调 xtask（`build-translate` →
+  `dist --release-only --tier all`），第 6 包的翻译模型在 CI 内现拉。
+  只跑 `windows-latest`，版本号唯一真相源 `Cargo.toml`。
+- **状态**：没开始（DESIGN §12.9 第 8 步）。
+
+## #7 界面全量多语言（deferred，CI 之后）
+
+- **内容**：全部应用字符串（菜单/按钮/toast/对话框）走 string table，
+  `config.toml [ui] lang` 选择界面语言（默认 `auto` 跟系统 locale），首版中英
+  两表，查表带回退链。现在只有托盘/overlay 菜单 + 设置框跟 `[ui] lang`，
+  toast/about 还是中文。
+- **状态**：deferred（DESIGN §12.11）。
+
+## #8 设置框选项卡化（todo）
+
+- **内容**：单个设置框越来越挤。按 Tab 控件分组（热键 / OCR / 翻译 / 搜索 /
+  保存 / 界面），底下还是同一套行级保留注释 writer + 校验。
+- **状态**：待排期。待确认：选项卡 = 按 config section 分？
+
+## #9 在线翻译provider（todo，待拍板）
+
+- **内容**：`[translate] source = "online"` 现在 toast 回退本地。需要定：
+  provider 选型、key 存哪（本地 config，永不进 git）、每次调用的隐私 consent。
+- **状态**：等决议（哪家？key 怎么管？）。
+
+## #10 热键：LL hook 兜底 + 改键范围（todo，待定范围）
+
+- **内容**：裸 PrintScreen 被 Win11 截图工具占、`Win+Shift+S` 被 Explorer 占，
+  要 cover 得上 `WH_KEYBOARD_LL` hook fallback（Flameshot 路线，无需管理员）。
+  设置框热键现在是 v1 占位（单组合，冲突保留旧键）。
+- **状态**：等定范围（hook 兜底？多组合改键？都要？）。
+
+## #11 应用/托盘图标（todo，待美术 + 范围）
+
+- **内容**：exe + 托盘图标还是系统默认。需要：`.ico` 美术来源，构建时嵌入，
+  托盘 `NOTIFYICONDATAW` 跟着换。
+- **状态**：等美术（ICO 谁出？）+ 范围（只 exe，还是托盘一起？）。
+
+## #12 显存：闲置模型卸载（todo，待数据）
+
+- **内容**：ORT session（+DirectML）常驻，低显存机器上占着内存不放。
+  候选形态：闲置超时自动卸载、手动加载/卸载开关、按档关 GPU。
+- **状态**：等数据（实测显存占用多少？N 分钟闲置自卸，还是给开关？）。
