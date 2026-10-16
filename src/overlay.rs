@@ -53,7 +53,7 @@ use windows::{
                 TPM_RETURNCMD, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
                 WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
                 WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_TOOLWINDOW,
-                WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WS_VSCROLL, SetTimer, SM_CXSCREEN, SM_CYSCREEN,
+                WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WS_VSCROLL, KillTimer, SetTimer, SM_CXSCREEN, SM_CYSCREEN,
             },
         },
     },
@@ -84,6 +84,12 @@ const M_SETTINGS: usize = 2011;
 const TICK_MS: u32 = 50;
 const TIMER_TICK: usize = 1;
 const TIMER_CLOSE: usize = 2;
+// Dedicated fade driver: the 50ms logic tick only yields ~16fps fades
+// (6%+ alpha steps read as flicker), so the toast fade runs on its own
+// 30ms timer (~26fps, ~8 alpha units per frame). Spinner/download stay
+// on the slow tick; selection never conflicts (no layer caching).
+const TIMER_FADE: usize = 3;
+const FADE_MS: u32 = 30;
 const TAP_MS: u64 = 300;
 const TAP_PX: i32 = 6;
 
@@ -647,7 +653,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             LRESULT(0)
         }
         WM_TIMER => {
-            on_tick(st, wp.0);
+            if wp.0 == TIMER_FADE {
+                // Fast fade driver: self-kills once the toast is gone.
+                if st.toast.is_none() {
+                    unsafe {
+                        let _ = KillTimer(Some(st.hwnd), TIMER_FADE);
+                    }
+                } else if poll_toast(st) {
+                    invalidate(st);
+                }
+            } else {
+                on_tick(st, wp.0);
+            }
             LRESULT(0)
         }
         WM_SETCURSOR => {
@@ -897,23 +914,8 @@ fn on_tick(st: &mut State, id: usize) {
             dirty = true; // keep spinner turning
         }
     }
-    if let Some(t) = &st.toast {
-        if Instant::now() >= t.deadline {
-            st.toast = None;
-            st.toast_level = 0xFF;
-            dirty = true;
-        } else {
-            // Smooth fade: alpha follows the remaining time continuously.
-            // Opaque for the first 2s, linear 220->0 over the last 1s; the
-            // 50ms tick yields ~20 repaints across the fade (vs 8 quantized).
-            let remain = t.deadline.saturating_duration_since(Instant::now()).as_millis();
-            let alpha = toast_fade_alpha(remain);
-            if alpha != st.toast_level {
-                st.toast_level = alpha;
-                dlog(format!("tick toast remain={remain}ms alpha={alpha}"));
-                dirty = true;
-            }
-        }
+    if poll_toast(st) {
+        dirty = true;
     }
     // Download progress + completion.
     if st.dl.is_some() {
@@ -1763,7 +1765,33 @@ fn show_toast(st: &mut State, text: String) {
     let now = Instant::now();
     st.toast = Some(Toast { text, deadline: now + Duration::from_secs(3) });
     st.toast_level = 0xFF; // force first paint
+    // Arm the fast fade driver (idempotent re-arm; self-kills on expiry).
+    unsafe {
+        let _ = SetTimer(Some(st.hwnd), TIMER_FADE, FADE_MS, None);
+    }
     invalidate(st);
+}
+
+/// Shared toast-fade step: expiry clears the toast, otherwise alpha tracks
+/// remaining time. Returns true when the visible alpha changed.
+fn poll_toast(st: &mut State) -> bool {
+    let expired = st.toast.as_ref().map(|t| Instant::now() >= t.deadline).unwrap_or(false);
+    if expired {
+        st.toast = None;
+        st.toast_level = 0xFF;
+        return true;
+    }
+    if st.toast.is_none() {
+        return false;
+    }
+    let remain = st.toast.as_ref().unwrap().deadline.saturating_duration_since(Instant::now()).as_millis();
+    let alpha = toast_fade_alpha(remain);
+    if alpha != st.toast_level {
+        st.toast_level = alpha;
+        true
+    } else {
+        false
+    }
 }
 
 /// Toast fade alpha from remaining lifetime in ms: 220 opaque while more
@@ -1863,9 +1891,6 @@ fn blit_bar(
 }
 
 fn paint(st: &mut State) {
-    // Measurement probe (SELECTABLE_DEBUG=1 -> temp/clicks.log): per-paint
-    // compose cost + toast alpha, to diagnose fade pacing (judder vs bug).
-    let t0 = Instant::now();
     unsafe {
         let mut ps: PAINTSTRUCT = std::mem::zeroed();
         let front = BeginPaint(st.hwnd, &mut ps);
@@ -1935,10 +1960,6 @@ fn paint(st: &mut State) {
 
         let _ = BitBlt(front, 0, 0, st.w as i32, st.h as i32, Some(hdc), 0, 0, SRCCOPY);
         let _ = EndPaint(st.hwnd, &ps);
-    }
-    if st.toast.is_some() {
-        let a = if st.toast_level == 0xFF { 220 } else { st.toast_level };
-        dlog(format!("paint toast alpha={a} dt={}ms", t0.elapsed().as_millis()));
     }
 }
 
