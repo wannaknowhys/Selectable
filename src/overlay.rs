@@ -910,6 +910,7 @@ fn on_tick(st: &mut State, id: usize) {
             let alpha = toast_fade_alpha(remain);
             if alpha != st.toast_level {
                 st.toast_level = alpha;
+                dlog(format!("tick toast remain={remain}ms alpha={alpha}"));
                 dirty = true;
             }
         }
@@ -1862,6 +1863,9 @@ fn blit_bar(
 }
 
 fn paint(st: &mut State) {
+    // Measurement probe (SELECTABLE_DEBUG=1 -> temp/clicks.log): per-paint
+    // compose cost + toast alpha, to diagnose fade pacing (judder vs bug).
+    let t0 = Instant::now();
     unsafe {
         let mut ps: PAINTSTRUCT = std::mem::zeroed();
         let front = BeginPaint(st.hwnd, &mut ps);
@@ -1931,6 +1935,10 @@ fn paint(st: &mut State) {
 
         let _ = BitBlt(front, 0, 0, st.w as i32, st.h as i32, Some(hdc), 0, 0, SRCCOPY);
         let _ = EndPaint(st.hwnd, &ps);
+    }
+    if st.toast.is_some() {
+        let a = if st.toast_level == 0xFF { 220 } else { st.toast_level };
+        dlog(format!("paint toast alpha={a} dt={}ms", t0.elapsed().as_millis()));
     }
 }
 
