@@ -12,6 +12,9 @@
 - `translate_url` default template uses `{tgt}` (BCP47, e.g. `zh-CN`).
 
 ### Added
+- Save-As dialog now offers PNG and JPEG (plus all-files); a typed extension
+  wins, extensionless names follow the picked filter; JPEG encodes at quality
+  90. Quick-save stays PNG.
 - `[translate] source = bergamot|online|external` switch (online falls back
   to local with a notice until wired); `external` mode opens the translator
   URL directly (partial = selection, full = everything).

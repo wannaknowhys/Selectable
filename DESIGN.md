@@ -139,8 +139,9 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
     spaces/dots stripped, long names truncated, empty titles fall back to `screenshot`.
 - Right-click the button: the **standard system Save dialog** via Win32
   (`IFileSaveDialog` through the `windows` crate's COM bindings — no hand-rolled UI),
-  prefilled with the same default name/folder, png extension.
-- PNG encoding via the `image` crate; failures show a MessageBox and are logged.
+  prefilled with the same default name/folder; PNG or JPEG by filter/extension
+  (JPEG at quality 90), quick-save stays PNG.
+- PNG/JPEG encoding via the `image` crate; failures show a MessageBox and are logged.
 
 ## 11. Interaction assembly (M3, decided; item B pending approval)
 

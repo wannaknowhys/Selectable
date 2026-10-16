@@ -137,8 +137,8 @@ Rust（rustup）、MSVC 或 Clang、CMake（Bergamot 二期）、Node（仅拉�
     `<>:"/\|?*` 及控制字符替换为 `_`，尾部空格/点去掉，超长截断，空标题兜底 `screenshot`。
 - 右键按钮：弹出**系统标准另存为对话框**，用 Win32 API 直接调（`IFileSaveDialog`，
   Rust 经 `windows` crate 做 COM 调用即可，不手搓），默认文件名同左键规则、默认目录
-  同上，扩展名 png。
-- PNG 编码用 `image` crate；保存失败弹系统提示（MessageBox）并记日志，不静默丢图。
+  同上，PNG/JPEG 按过滤器/扩展名定（JPEG quality 90），左键快速保存保持 PNG。
+- PNG/JPEG 编码用 `image` crate；保存失败弹系统提示（MessageBox）并记日志，不静默丢图。
 
 ## 11. 交互总装（M3，已定；B 项待拍板）
 

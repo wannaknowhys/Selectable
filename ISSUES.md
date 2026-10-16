@@ -5,11 +5,14 @@
 > Real-world feedback from the user, ordered by severity. Checked off one by one,
 > with code pointers for later review.
 
-## #5 Save-As with PNG/JPEG choice (todo)
+## #5 Save-As with PNG/JPEG choice (done)
 
 - **Content**: the `GetSaveFileNameW` filter and save branch currently offer PNG
   only; add JPEG (the `image` dependency already keeps just the png+jpeg codecs).
-- **Status**: unscheduled.
+- **Status**: closed. Filter is now PNG / JPEG / all-files; an explicit typed
+  extension wins, extensionless names follow the picked filter slot; JPEG
+  encodes at quality 90 (the `save` default of 75 rings on screenshot text).
+  Quick-save (left-click) stays PNG.
 
 ## #1 Selection must not copy; only Ctrl+C copies
 

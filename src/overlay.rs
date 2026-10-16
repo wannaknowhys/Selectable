@@ -2407,6 +2407,27 @@ fn rebuild_shot(st: &State) -> RgbImage {
     img
 }
 
+/// Extension-driven encoder (issue #5): jpg/jpeg go through an explicit
+/// quality-90 JPEG pass (the `save` default of 75 rings on screenshot text);
+/// everything else keeps the `image` crate's extension dispatch (png, …).
+fn save_shot(shot: &RgbImage, path: &std::path::Path) -> Result<()> {
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("jpg") | Some("jpeg") => {
+            let f = std::fs::File::create(path).with_context(|| format!("create {}", path.display()))?;
+            let mut w = std::io::BufWriter::new(f);
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, 90);
+            enc.encode(&shot.as_raw()[..], shot.width(), shot.height(), image::ExtendedColorType::Rgb8)
+                .with_context(|| format!("jpeg-encode {}", path.display()))?;
+            Ok(())
+        }
+        _ => {
+            shot.save(path).with_context(|| format!("save {}", path.display()))?;
+            Ok(())
+        }
+    }
+}
+
 fn do_save_as(st: &mut State) {
     match save_as_dialog(st) {
         Ok(Some(p)) => show_toast(st, format!("已保存：{}", p.to_string_lossy())),
@@ -2422,8 +2443,7 @@ fn save_as_dialog(st: &State) -> Result<Option<std::path::PathBuf>> {
         let name = default_filename(&st.title);
         let mut file_buf: Vec<u16> = name.encode_utf16().chain([0]).collect();
         file_buf.resize(1024, 0);
-        // TODO(#5): offer JPEG next to PNG (filter + save branch + quality).
-        let filter: Vec<u16> = "PNG 图片\0*.png\0所有文件\0*.*\0\0"
+        let filter: Vec<u16> = "PNG 图片\0*.png\0JPEG 图片\0*.jpg;*.jpeg\0所有文件\0*.*\0\0"
             .encode_utf16()
             .collect();
         let dir_w: Vec<u16> = dir.to_string_lossy().encode_utf16().chain([0]).collect();
@@ -2439,10 +2459,12 @@ fn save_as_dialog(st: &State) -> Result<Option<std::path::PathBuf>> {
         if GetSaveFileNameW(&mut ofn).as_bool() {            let len = file_buf.iter().position(|&c| c == 0).unwrap_or(0);
             let mut path = std::path::PathBuf::from(String::from_utf16_lossy(&file_buf[..len]));
             if path.extension().is_none() {
-                path.set_extension("png");
+                // lpstrDefExt always suggests png, so honor the picked
+                // filter (issue #5): JPEG slot -> .jpg, else .png.
+                path.set_extension(if ofn.nFilterIndex == 2 { "jpg" } else { "png" });
             }
             let shot = rebuild_shot(st);
-            shot.save(&path)?;
+            save_shot(&shot, &path)?;
             Ok(Some(path))
         } else {
             // FALSE means cancel OR error — tell them apart (issue #4).
@@ -2566,6 +2588,28 @@ mod tests {
         let d = screenshot_dir(None).unwrap();
         assert!(d.ends_with("ScreenShot"));
         assert!(d.parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn save_shot_dispatches_on_extension() {
+        // Tiny gradient so JPEG has something to compress.
+        let mut img = RgbImage::new(32, 16);
+        for (x, _, p) in img.enumerate_pixels_mut() {
+            *p = image::Rgb([(x * 8) as u8, 100, 200]);
+        }
+        let dir = std::path::PathBuf::from("temp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("save-shot-test.png");
+        let jpg = dir.join("save-shot-test.jpg");
+        save_shot(&img, &png).unwrap();
+        save_shot(&img, &jpg).unwrap();
+        let png_bytes = std::fs::read(&png).unwrap();
+        let jpg_bytes = std::fs::read(&jpg).unwrap();
+        assert!(png_bytes.starts_with(&[0x89, b'P', b'N', b'G']), "not png");
+        assert!(jpg_bytes.starts_with(&[0xFF, 0xD8]), "not jpeg");
+        assert!(!png_bytes.is_empty() && !jpg_bytes.is_empty());
+        let _ = std::fs::remove_file(&png);
+        let _ = std::fs::remove_file(&jpg);
     }
 
     fn toy_state() -> State {
