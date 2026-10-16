@@ -228,7 +228,8 @@ struct State {
     dragging: bool,
     // UI extras.
     toast: Option<Toast>,
-    toast_level: u8, // last painted fade level; 0xFF forces repaint
+    // Toast: last painted alpha 0..=220; 0xFF forces repaint on next paint.
+    toast_level: u8,
     tmode: TMode,
     translated: Option<Translated>,
     translating: bool,
@@ -902,12 +903,13 @@ fn on_tick(st: &mut State, id: usize) {
             st.toast_level = 0xFF;
             dirty = true;
         } else {
-            // Quantize the fade to 8 levels: ~8 repaints per toast instead of 60.
+            // Smooth fade: alpha follows the remaining time continuously.
+            // Opaque for the first 2s, linear 220->0 over the last 1s; the
+            // 50ms tick yields ~20 repaints across the fade (vs 8 quantized).
             let remain = t.deadline.saturating_duration_since(Instant::now()).as_millis();
-            let level =
-                (if remain > 1000 { 8 } else { (remain * 8 / 1000) as u8 + 1 }).min(8);
-            if level != st.toast_level {
-                st.toast_level = level;
+            let alpha = toast_fade_alpha(remain);
+            if alpha != st.toast_level {
+                st.toast_level = alpha;
                 dirty = true;
             }
         }
@@ -1763,16 +1765,15 @@ fn show_toast(st: &mut State, text: String) {
     invalidate(st);
 }
 
-/// Toast fade alpha for a quantized level 0..=8: 220 opaque at full, 0 gone.
-/// u16 math is load-bearing: the old `level * 220 / 8` in u8 overflowed past
-/// level 1 (7*220=1540) — debug builds abort, release builds wrap to garbage.
-/// Regression test below pins the table.
-fn toast_alpha(level: u8) -> u8 {
-    let a = level.min(8);
-    if a >= 8 {
+/// Toast fade alpha from remaining lifetime in ms: 220 opaque while more
+/// than 1s remains, linear 220->0 across the last second, 0 at expiry.
+/// u128 math: `remain * 220` can exceed u64 range in theory; the cast to u8
+/// happens after clamping to 220. Regression test below pins the curve.
+fn toast_fade_alpha(remain_ms: u128) -> u8 {
+    if remain_ms > 1000 {
         220
     } else {
-        (a as u16 * 220 / 8) as u8
+        ((remain_ms * 220 / 1000).min(220)) as u8
     }
 }
 
@@ -1910,9 +1911,13 @@ fn paint(st: &mut State) {
             }
         }
 
-        // Toast on top of everything (alpha from the quantized level).
+        // Toast on top of everything (alpha tracked per-tick; 0xFF = first
+        // paint before any tick, treat as fully opaque).
         let toast_data: Option<(String, u8)> = match &st.toast {
-            Some(t) => Some((t.text.clone(), toast_alpha(st.toast_level))),
+            Some(t) => Some((
+                t.text.clone(),
+                if st.toast_level == 0xFF { 220 } else { st.toast_level },
+            )),
             None => None,
         };
         if let Some((text, alpha)) = toast_data {
@@ -2846,20 +2851,24 @@ mod tests {
 
     #[test]
     fn toast_alpha_table() {
-        // Regression: u8 `level * 220` overflowed past level 1 (debug abort,
-        // release wrap). Pinned values: level*220/8, 220 cap at 8+.
-        assert_eq!(
-            (0..=9u8).map(toast_alpha).collect::<Vec<_>>(),
-            vec![0, 27, 55, 82, 110, 137, 165, 192, 220, 220]
-        );
-        assert_eq!(toast_alpha(0xFF), 220, "sentinel clamps, never panics");
+        // Regression: fade curve must be monotonic, capped at 220, pinned
+        // at key points (opaque above 1s, ~half at 500ms, 0 at expiry).
+        assert_eq!(toast_fade_alpha(3000), 220);
+        assert_eq!(toast_fade_alpha(1001), 220);
+        assert_eq!(toast_fade_alpha(1000), 220);
+        assert_eq!(toast_fade_alpha(500), 110);
+        assert_eq!(toast_fade_alpha(1), 0);
+        assert_eq!(toast_fade_alpha(0), 0);
         let mut prev = 0u8;
-        for l in 0..=9u8 {
-            let a = toast_alpha(l);
-            assert!(a >= prev, "fade must be monotonic");
+        for ms in (0..=3000u128).step_by(37) {
+            let a = toast_fade_alpha(ms);
             assert!(a <= 220);
+            assert!(a >= prev, "fade must be monotonic in remaining time");
             prev = a;
         }
+        // Strict monotonic spot-checks across the fade second.
+        assert!(toast_fade_alpha(900) > toast_fade_alpha(500));
+        assert!(toast_fade_alpha(500) > toast_fade_alpha(100));
     }
 
     /// Offscreen helper: 400x300 white canvas, read back as RGBA buf + RgbImage.

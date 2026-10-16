@@ -161,9 +161,10 @@ Rust (rustup), MSVC or Clang, CMake (phase 2 Bergamot), Node (fetch script only)
   screen strip via quad-edge interpolation. Long-press selects by strips, no more
   even splitting. Accurate for horizontal text; vertical falls back to whole-box.
 - **Toast**: bottom-left rounded translucent strip showing copied text, fades out
-  over 3s (8 quantized levels, ~8 repaints instead of 60; alpha comes from the
-  pure `toast_alpha()` — u16 math, since u8 `level*220` overflows and aborts;
-  the `toast_alpha_table` regression test pins the table), truncated when long.
+  over 3s (opaque 2s, then a smooth linear 220→0 fade across the last second;
+  alpha comes from the pure `toast_fade_alpha()` over remaining ms, repainted
+  on the 50ms tick — ~20 repaints per fade; the `toast_alpha_table`
+  regression test pins the curve), truncated when long.
 - **Translation (placeholder)**: engine not wired yet; actions toast instead. State
   machine (final): `Translate → (context-menu partial) overlay + "Cancel" → (press)
   original + "Full" → (press) full overlay + "Cancel" → (press) original + "Full"…`.
