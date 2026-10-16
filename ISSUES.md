@@ -31,7 +31,11 @@
 - **Fix**: backbuffer (compose once to a memory DC, single `BitBlt`) + dirty-region
   invalidation (only repaint what changed) + timer repaints only while spinner/toast
   are active. Backbuffer first, then measure.
-- **Status**: open.
+- **Status**: closed (verified on-device: no flicker during/after selection).
+  Landed: backbuffer + dirty-gated timer + `WS_CLIPCHILDREN` on the overlay
+  (child comboboxes no longer painted over) + smooth toast fade on its own
+  30ms timer. Full-window `InvalidateRect` stays: a full compose costs ~7–8ms,
+  so dirty-region repaint is explicitly declined.
 
 ## #3 Loading spinner seemingly never drawn
 

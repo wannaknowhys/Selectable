@@ -21,6 +21,13 @@
   staged Esc (cancel translation → clear selection → close).
 
 ### Fixed
+- Overlay selection is now live browser-style: press-drag paints the blue/white
+  char-range highlight as the cursor moves (no more rubber-band box); the cursor
+  shows an I-beam over OCR text, arrow elsewhere.
+- Overlay main window uses `WS_CLIPCHILDREN`, so parent repaints no longer paint
+  over the language dropdowns (the `Auto`/target flicker is gone).
+- Toast fade is smooth: linear 220→0 over the last second on a dedicated 30ms
+  timer (~33 frames per fade) instead of 8 quantized steps on the 50ms tick.
 - Fallback consent dialog now uses the system message font (same as Notepad)
   and measures the frame from the wrapped body text, so Yes/No buttons are
   never clipped regardless of host length.
