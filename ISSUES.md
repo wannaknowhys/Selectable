@@ -40,7 +40,7 @@
   gradient dots + centered "recognizing…" label (the old 12 small gray dots were
   indeed near-invisible over busy screenshots). Same proven primitives as
   buttons/toast.
-- **Status**: awaiting on-device sighting (visible on any slow recognition).
+- **Status**: closed (verified on-device: spinner visible during recognition).
 
 ## #4 Right-clicking Save shows no dialog
 
@@ -50,6 +50,7 @@
   the return value, so every menu item silently did nothing (same cause behind
   dead copy-selected/copy-all). Now dispatching on the return value; verified
   on-device (menu → save lands a file).
-- **Left**: `GetSaveFileNameW` FALSE now distinguishes cancel vs error
-  (`CommDlgExtendedError` + toast). Close after one on-device dialog sighting.
-- **Status**: closed (confirmed on-device: menu copy and Save → save-as dialog both work).
+- **`GetSaveFileNameW` FALSE now distinguishes cancel vs error
+  (`CommDlgExtendedError` + toast). Verified on-device: dialog shows, cancel
+  is silent (no toast), successful save toasts.
+- **Status**: closed.
