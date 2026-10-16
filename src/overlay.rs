@@ -2,8 +2,8 @@
 // - Pops instantly with a spinner; OCR arrives async from the worker thread.
 // - Owner-drawn translucent global buttons (Save / Translate), top-center,
 //   shifted down if they would cover text.
-// - Click = whole box; press-drag = char-range selection (CTC alignment strips),
-//   rendered white-on-dark-blue, cross-box in reading order.
+// - Click = whole box; press-drag = live char-range selection (CTC strips,
+//   white-on-dark-blue, cross-box in reading order; I-beam over text).
 // - Copy toast bottom-left, 3s fade. Translation engine is a stub (toasts);
 //   its state machine + render path are already wired.
 use std::{collections::HashMap, ptr::null_mut, time::{Duration, Instant}};
@@ -23,7 +23,7 @@ use windows::{
             DEFAULT_QUALITY,             DIB_RGB_COLORS, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP, DT_VCENTER,
             DT_WORDBREAK,
             FW_NORMAL, HBITMAP, HDC, HFONT, HGDIOBJ, HOLLOW_BRUSH, InvalidateRect, OUT_DEFAULT_PRECIS,
-            PAINTSTRUCT, PS_DOT, PS_SOLID, Rectangle,
+            PAINTSTRUCT, PS_SOLID, Rectangle,
             SRCCOPY, TRANSPARENT,
         },
         System::SystemInformation::GetLocalTime,
@@ -42,17 +42,17 @@ use windows::{
             WindowsAndMessaging::{
                 CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
                 DestroyWindow, DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW,
-                GetSystemMetrics, GetWindowLongPtrW, GetWindowTextW, LoadCursorW,
+                GetSystemMetrics, GetWindowLongPtrW, GetWindowTextW, LoadCursorW, SetCursor,
                 PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
                 SetWindowLongPtrW, SetWindowTextW, TrackPopupMenu, TranslateMessage,
                 CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBN_CLOSEUP,
                 CBN_SELCHANGE,
-                CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDYES,
+                CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, IDC_ARROW, IDC_IBEAM, IDYES,
                 MB_ICONQUESTION, MB_YESNO, MENU_ITEM_FLAGS, MF_GRAYED, MF_STRING, MSG, MessageBoxW, SM_CXVIRTUALSCREEN,
                 SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWNORMAL,
                 TPM_RETURNCMD, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY,
                 WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT,
-                WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW,
+                WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW,
                 WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, WS_VSCROLL, SetTimer, SM_CXSCREEN, SM_CYSCREEN,
             },
         },
@@ -251,7 +251,6 @@ struct State {
     dl: Option<DlState>,
     ox: i32,
     oy: i32,
-    mouse: (i32, i32),
     mons: Vec<Mon>,
     focus: Mon,
     back: Option<BackBuf>,
@@ -386,7 +385,6 @@ fn show_overlay_inner(
             dl: None,
             ox: vx,
             oy: vy,
-            mouse: (0, 0),
             mons,
             focus,
             back: Some(BackBuf::new(vw, vh)?),
@@ -651,9 +649,30 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             on_tick(st, wp.0);
             LRESULT(0)
         }
+        WM_SETCURSOR => {
+            // Child controls (comboboxes) keep default handling.
+            if (wp.0 as isize) != (st.hwnd.0 as isize) {
+                return DefWindowProcW(hwnd, msg, wp, lp);
+            }
+            // I-beam over OCR text, arrow elsewhere (buttons/empty area).
+            let over_text = unsafe {
+                let mut pt = POINT { x: 0, y: 0 };
+                if GetCursorPos(&mut pt).is_ok() {
+                    line_at_point(st, (pt.x - st.ox, pt.y - st.oy)).is_some()
+                } else {
+                    false
+                }
+            };
+            let id = if over_text { IDC_IBEAM } else { IDC_ARROW };
+            unsafe {
+                if let Ok(h) = LoadCursorW(None, id) {
+                    SetCursor(Some(h));
+                }
+            }
+            LRESULT(1)
+        }
         WM_LBUTTONDOWN => {
             let p = (loword(lp.0) as i32, hiword(lp.0) as i32);
-            st.mouse = p;
             if st.dl.as_ref().map(|d| in_rect(p, d.cancel_rect)).unwrap_or(false) {
                 if let Some(d) = st.dl.as_ref() {
                     d.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -686,7 +705,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_MOUSEMOVE => {
             let p = (loword(lp.0) as i32, hiword(lp.0) as i32);
-            st.mouse = p;
             if st.press_at.is_some() {
                 let (t0, p0) = st.press_at.unwrap();
                 if !st.dragging
@@ -697,7 +715,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 if st.dragging {
                     st.cursor = char_at_point(st, p).or(st.cursor);
-                    invalidate(st);
+                    if st.anchor.is_none() {
+                        st.anchor = st.cursor;
+                    }
+                    // Live browser-style highlight: selection follows the
+                    // cursor during the drag (no rubber band anymore).
+                    let live = norm_range(st.anchor, st.cursor);
+                    if live != st.sel {
+                        st.sel = live;
+                        if st.sel.is_some() {
+                            set_title(st, &format!("Selectable — 已选中 {} 字", count_chars(st)));
+                        } else {
+                            set_title(st, "Selectable");
+                        }
+                        invalidate(st);
+                    }
                 }
             }
             LRESULT(0)
@@ -1724,10 +1756,6 @@ fn set_title(st: &State, msg: &str) {
     }
 }
 
-fn norm_rect(a: (i32, i32), b: (i32, i32)) -> (i32, i32, i32, i32) {
-    (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1))
-}
-
 fn show_toast(st: &mut State, text: String) {
     let now = Instant::now();
     st.toast = Some(Toast { text, deadline: now + Duration::from_secs(3) });
@@ -1854,32 +1882,22 @@ fn paint(st: &mut State) {
             // Line boxes.
             let hollow = GetStockObject(HOLLOW_BRUSH);
             let red = CreatePen(PS_SOLID, 2, COLORREF(0x0000FF));
-            let dot = CreatePen(PS_DOT, 1, COLORREF(0x000000));
             let old_brush = SelectObject(hdc, hollow);
             let old_pen = SelectObject(hdc, red.into());
             for l in &st.lines {
                 let (x0, y0, x1, y1) = l.quad.axis_aligned_bounds();
                 let _ = Rectangle(hdc, x0 as i32, y0 as i32, x1 as i32, y1 as i32);
             }
-            // Selection: dark-blue strips + white chars.
+            // Selection: dark-blue strips + white chars (live during drag).
             paint_selection(hdc, st);
             // Translated subtitles strictly above the selection (R2): they
             // cover the blue/white strips with their own dark panels.
             if let Some(tr) = st.translated.clone() {
                 paint_translated(hdc, st, &tr);
             }
-            // Drag rubber band while press-dragging.
-            if st.dragging {
-                if let Some((_, p0)) = st.press_at {
-                    SelectObject(hdc, dot.into());
-                    let r = norm_rect(p0, st.mouse);
-                    let _ = Rectangle(hdc, r.0, r.1, r.2, r.3);
-                }
-            }
             SelectObject(hdc, old_pen);
             SelectObject(hdc, old_brush);
             let _ = DeleteObject(red.into());
-            let _ = DeleteObject(dot.into());
             // Buttons.
             paint_button(hdc, st, st.btn_save, "保存");
             paint_button(hdc, st, st.btn_tr_sel, if tr_busy(st) { "取消翻译" } else { "翻译选中" });
@@ -2534,7 +2552,7 @@ mod tests {
             tworker: None, dl: None,
             btn_save: (0, 0, 0, 0), btn_tr_sel: (0, 0, 0, 0), btn_tr: (0, 0, 0, 0),
             combo_src_r: (0, 0, 0, 0), combo_tgt_r: (0, 0, 0, 0),
-            ox: 0, oy: 0, mouse: (0, 0),
+            ox: 0, oy: 0,
             mons: vec![crate::monitors::Mon { l: 0, t: 0, r: 1920, b: 1080, primary: true }],
             focus: crate::monitors::Mon { l: 0, t: 0, r: 1920, b: 1080, primary: true },
             back: None,
